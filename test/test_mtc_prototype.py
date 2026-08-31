@@ -1,9 +1,12 @@
+import logging
 import math
+from types import SimpleNamespace
 
 import pytest
 
 from dual_fr3_trunking_mtc.models import Keypoint
 from dual_fr3_trunking_mtc.mtc_prototype import (
+    _execute_stage_by_stage,
     build_mtc_stage_specs,
     mtc_stage_sequence_to_dict,
     mtc_stage_sequence_to_text,
@@ -188,3 +191,90 @@ def test_segment_executor_uses_the_mtc_stage_order():
     assert specs[9].primitive == "direct_move_to_next_anchor"
     assert specs[-1].primitive == "seat_cable_on_edge"
     assert "cartesian" in stage_description(specs[13])
+
+
+def _stage_execution_args():
+    return SimpleNamespace(
+        leader_group="left_fr3_arm",
+        follower_group="right_fr3_arm",
+        leader_ik_frame="left_fr3_hand_tcp",
+        follower_ik_frame="right_fr3_hand_tcp",
+        cartesian_step_size=0.01,
+        motion_velocity_scaling=0.1,
+        motion_acceleration_scaling=0.1,
+        initial_leader_index=1,
+        initial_follower_index=0,
+        align_initial_poses=True,
+        leader_lead_distance=0.1,
+        tool_roll=math.pi,
+        tool_pitch=0.0,
+    )
+
+
+def test_stage_execution_halts_after_first_execution_failure(monkeypatch):
+    created_stage_indices = []
+
+    class FakeTask:
+        solutions = [object()]
+
+        @staticmethod
+        def plan():
+            return True
+
+        @staticmethod
+        def execute(_solution):
+            return False
+
+    def fake_create_mtc_task(*_args, selected_stage_indices, **_kwargs):
+        created_stage_indices.append(next(iter(selected_stage_indices)))
+        return FakeTask(), []
+
+    monkeypatch.setattr(
+        "dual_fr3_trunking_mtc.mtc_prototype.create_mtc_task",
+        fake_create_mtc_task,
+    )
+    specs = [
+        SimpleNamespace(executable=True, stage_index=0, name="first"),
+        SimpleNamespace(executable=True, stage_index=1, name="must_not_run"),
+    ]
+
+    succeeded = _execute_stage_by_stage(
+        object(),
+        specs,
+        [],
+        [],
+        _stage_execution_args(),
+        logging.getLogger("test_stage_halt"),
+    )
+
+    assert succeeded is False
+    assert created_stage_indices == [0]
+
+
+def test_stage_execution_halts_after_planning_exception(monkeypatch):
+    created_stage_indices = []
+
+    def fake_create_mtc_task(*_args, selected_stage_indices, **_kwargs):
+        created_stage_indices.append(next(iter(selected_stage_indices)))
+        raise RuntimeError("planner failure")
+
+    monkeypatch.setattr(
+        "dual_fr3_trunking_mtc.mtc_prototype.create_mtc_task",
+        fake_create_mtc_task,
+    )
+    specs = [
+        SimpleNamespace(executable=True, stage_index=0, name="first"),
+        SimpleNamespace(executable=True, stage_index=1, name="must_not_run"),
+    ]
+
+    succeeded = _execute_stage_by_stage(
+        object(),
+        specs,
+        [],
+        [],
+        _stage_execution_args(),
+        logging.getLogger("test_stage_exception_halt"),
+    )
+
+    assert succeeded is False
+    assert created_stage_indices == [0]
