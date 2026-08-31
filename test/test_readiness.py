@@ -1,5 +1,6 @@
 from dual_fr3_trunking_mtc.readiness import (
     expected_arm_joint_names,
+    gripper_command_action_name,
     missing_arm_joint_names,
 )
 from dual_fr3_trunking_mtc.segment_executor import CONTROLLER_STATE_TOPICS
@@ -32,4 +33,13 @@ def test_segment_executor_accepts_real_and_gazebo_controller_topics():
     assert CONTROLLER_STATE_TOPICS["right"] == (
         "/right/right_fr3_arm_controller/controller_state",
         "/right_fr3_arm_controller/controller_state",
+    )
+
+
+def test_readiness_selects_backend_specific_gripper_action():
+    assert gripper_command_action_name("left", True) == (
+        "/left_franka_gripper/gripper_action"
+    )
+    assert gripper_command_action_name("right", False) == (
+        "/right_franka_gripper/gripper_cmd"
     )

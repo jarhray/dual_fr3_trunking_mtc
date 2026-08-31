@@ -1,7 +1,7 @@
 # dual_fr3_trunking_mtc 交接文档
 
-> 最后更新：2026-08-31。当前最高优先级不是继续扩展 MTC，而是修复
-> `dual_fr3_moveit_config` 中真机控制器命名空间改造造成的 Gazebo 回归。
+> 最后更新：2026-08-31。`dual_fr3_moveit_config` 中真机控制器命名空间改造造成的
+> Gazebo 回归已经修复；后续优先复核真机夹爪限位并继续逐 stage 验证。
 
 ## 1. 项目定位
 
@@ -16,8 +16,9 @@
 
 ## 2. 当前最重要结论
 
-当前真机启动链已经能够连接两台 FR3、两侧夹爪、MoveGroup 和左右轨迹控制器，
-但 Gazebo 路径已经发生回归。后续 agent 必须先恢复 Gazebo，再继续 MTC 动作调试。
+当前真机启动链已经能够连接两台 FR3、两侧夹爪、MoveGroup 和左右轨迹控制器。
+Gazebo 已恢复为单 controller manager，并使用独立的 MoveIt controller 映射；
+左右臂和两侧物理仿真夹爪均已完成 Action 闭环验证。
 
 目前仍保留逐动作脚本：
 
@@ -28,9 +29,9 @@ ros2 run dual_fr3_trunking_mtc trunking_step_by_step.py
 ```
 
 脚本会启动 `dual_fr3_moveit_config gazebo.launch.py`，然后复用
-`DualFR3LinearController`、`move_to_ompl()` 和 `move_to_cartesian()`。但是当前
-Gazebo 控制器名称和 MoveIt 控制器配置不一致，因此不要再把这条路径标记为“已验证”；
-应先完成第 12 节的 P0 修复与验收。
+`DualFR3LinearController`、`move_to_ompl()` 和 `move_to_cartesian()`。
+控制器助手会优先使用真机的 `gripper_action`，在 Gazebo 下自动选择
+`gripper_cmd`。
 
 - 回车：执行。
 - `s`：跳过。
@@ -158,9 +159,9 @@ follower 转向和 follower 移动。
 
 ## 7. 已知失败证据
 
-### 7.1 当前 Gazebo 回归：控制器名称分流缺失
+### 7.1 已修复的 Gazebo 回归：控制器名称分流缺失
 
-这是下一个 agent 的首要问题，已经能从当前配置静态确认：
+回归原因是：
 
 - 真机 `demo.launch.py` 被改成两个 controller manager：
   `/left/controller_manager` 和 `/right/controller_manager`。
@@ -173,11 +174,11 @@ follower 转向和 follower 移动。
   `/controller_manager`，创建的是 `/left_fr3_arm_controller`、
   `/right_fr3_arm_controller`。
 
-因此 Gazebo 的实际 Action 名称与 MoveIt 当前查找的名称不一致。即使 Gazebo 中
-controller 显示 active，MoveIt/RViz 也可能无法把轨迹发送给它们。这不是 MTC stage
-顺序问题，不能靠延长 watchdog 或跳过就绪检查修复。
+现已新增 `config/moveit_controllers_gazebo.yaml`，由 `gazebo.launch.py` 专用；
+`demo.launch.py` 继续使用原 `moveit_controllers.yaml`，真机双 controller manager
+结构和名称未改动。
 
-合理修复方向是为不同后端分开 MoveIt 控制器映射，例如：
+当前按不同后端分开 MoveIt 控制器映射：
 
 ```text
 真机/双 controller manager:
@@ -189,9 +190,7 @@ Gazebo/单 controller manager:
   right_fr3_arm_controller
 ```
 
-不要为了修 Gazebo 直接把共享文件全部恢复成旧名称，否则会再次破坏已经连通的真机
-执行链。应由 `demo.launch.py` 和 `gazebo.launch.py` 各自加载匹配后端的配置文件，或
-用等价的条件化配置实现明确分流。
+不要把 Gazebo 映射重新合入真机文件，否则会再次破坏已经连通的真机执行链。
 
 ### 7.2 最新真机执行证据
 
@@ -356,7 +355,7 @@ mtc_keep_alive_sec=30.0
 ## 11. 推荐排查顺序
 
 1. 只启动 `dual_fr3_moveit_config gazebo.launch.py`，不要同时启动 MTC。
-2. 检查 `/controller_manager/list_controllers` 中三个 Gazebo controller 是否 active。
+2. 检查 `/controller_manager/list_controllers` 中五个 Gazebo controller 是否 active。
 3. 用 `ros2 action list` 记录 Gazebo 实际的两个
    `follow_joint_trajectory` Action 名称。
 4. 检查 move_group 日志中 `Added FollowJointTrajectory controller for ...` 的名称，
@@ -371,7 +370,7 @@ mtc_keep_alive_sec=30.0
 
 ## 12. 后续 agent 任务优先级
 
-### P0：恢复 Gazebo，同时保留真机控制器命名空间
+### P0（已完成）：恢复 Gazebo，同时保留真机控制器命名空间
 
 - 不要删除或复杂化 `trunking_step_by_step.py`。
 - 不要用单一 `moveit_controllers.yaml` 强行同时描述两种不相同的 controller 名称。
@@ -387,11 +386,16 @@ mtc_keep_alive_sec=30.0
 
 P0 验收条件：
 
-1. `gazebo.launch.py` 能稳定启动，三个 controller 为 active。
+1. `gazebo.launch.py` 能稳定启动，五个 controller 为 active。
 2. MoveIt 配置的两个 controller 与 `ros2 action list` 完全一致。
 3. RViz 分别执行左右臂轨迹时 Gazebo 和 `/joint_states` 同步变化。
 4. `mtc_prototype.launch.py use_gazebo:=true` 的就绪门能够通过。
 5. 真机 launch 的命名空间配置没有被回退或覆盖。
+
+2026-08-31 验证结果：五个 Gazebo controller 均为 active；MoveIt 加载
+`left_fr3_arm_controller`、`right_fr3_arm_controller`、`left_franka_gripper`、
+`right_franka_gripper`；左右臂小幅轨迹均成功；夹爪从 0.04 m 分别移动到约
+0.0 m 和 0.02 m，`/joint_states` 中两侧 mimic finger 同步；readiness gate 通过。
 
 ### P1：复核真机夹爪限位修复
 
@@ -413,7 +417,7 @@ watchdog。
 ### P4：补全真机安全策略
 
 就绪门和失败即停已经实现，但仍需确认速度/加速度限制、初始关节状态、IP、frame、
-急停、碰撞保护、接触检测和力控策略。仿真回归修好前不要继续扩大真机动作范围。
+急停、碰撞保护、接触检测和力控策略。完成真机安全复核前不要继续扩大动作范围。
 
 ## 13. 不要重复踩坑
 

@@ -29,6 +29,14 @@ def missing_arm_joint_names(joint_names: Iterable[str]) -> set[str]:
     return expected_arm_joint_names().difference(joint_names)
 
 
+def gripper_command_action_name(
+    side: str, namespaced_arm_controllers: bool
+) -> str:
+    """Return the backend-specific GripperCommand action name."""
+    action_name = "gripper_action" if namespaced_arm_controllers else "gripper_cmd"
+    return f"/{side}_franka_gripper/{action_name}"
+
+
 class TrunkingReadinessGate(Node):
     """Block MTC startup until the complete execution chain is ready."""
 
@@ -112,7 +120,9 @@ class TrunkingReadinessGate(Node):
         self._gripper_homing_clients: Dict[str, ActionClient] = {}
         if self.start_gripper:
             for side in ARM_SIDES:
-                command_name = f"/{side}_franka_gripper/gripper_action"
+                command_name = gripper_command_action_name(
+                    side, self.namespaced_arm_controllers
+                )
                 command_client = ActionClient(
                     self,
                     GripperCommand,
