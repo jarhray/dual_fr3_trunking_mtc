@@ -2,6 +2,9 @@
 
 `dual_fr3_trunking_mtc` 是一个面向双臂 FR3 线槽走线任务的 Python 优先规划包。
 
+计划新增的 D455 + SAM2 线缆视觉模块，其纯 Python 核心任务、离线测试、输入输出和
+后续 ROS 2 适配边界见 [VISION_MODULE_HANDOFF.md](VISION_MODULE_HANDOFF.md)。
+
 它依赖 `dual_fr3_moveit_config` 提供的双臂 FR3 MoveIt 场景、机器人模型、控制器和线槽碰撞体。本包当前关注的是任务层逻辑：根据线槽路径关键点生成“拉直/跟随/边缘卡线”等段级动作规划，并在 RViz 中发布可视化结果。
 
 当前版本还不是完整执行闭环，也没有加入力控、视觉或真实插线细节。它先解决第一阶段问题：
