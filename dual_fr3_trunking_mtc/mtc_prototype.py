@@ -1032,36 +1032,53 @@ def _execute_stage_by_stage(
             spec.stage_index,
             spec.name,
         )
-        stage_task, _ = create_mtc_task(
-            node,
-            keypoints,
-            task_steps,
-            leader_group=args.leader_group,
-            follower_group=args.follower_group,
-            leader_ik_frame=args.leader_ik_frame,
-            follower_ik_frame=args.follower_ik_frame,
-            cartesian_step_size=args.cartesian_step_size,
-            motion_velocity_scaling=args.motion_velocity_scaling,
-            motion_acceleration_scaling=args.motion_acceleration_scaling,
-            initial_leader_index=args.initial_leader_index,
-            initial_follower_index=args.initial_follower_index,
-            align_initial_poses=args.align_initial_poses,
-            leader_lead_distance=args.leader_lead_distance,
-            tool_roll=args.tool_roll,
-            tool_pitch=args.tool_pitch,
-            selected_stage_indices={spec.stage_index},
-        )
-        if not stage_task.plan() or not stage_task.solutions:
+        try:
+            stage_task, _ = create_mtc_task(
+                node,
+                keypoints,
+                task_steps,
+                leader_group=args.leader_group,
+                follower_group=args.follower_group,
+                leader_ik_frame=args.leader_ik_frame,
+                follower_ik_frame=args.follower_ik_frame,
+                cartesian_step_size=args.cartesian_step_size,
+                motion_velocity_scaling=args.motion_velocity_scaling,
+                motion_acceleration_scaling=args.motion_acceleration_scaling,
+                initial_leader_index=args.initial_leader_index,
+                initial_follower_index=args.initial_follower_index,
+                align_initial_poses=args.align_initial_poses,
+                leader_lead_distance=args.leader_lead_distance,
+                tool_roll=args.tool_roll,
+                tool_pitch=args.tool_pitch,
+                selected_stage_indices={spec.stage_index},
+            )
+            plan_succeeded = stage_task.plan()
+        except Exception:  # noqa: BLE001 - execution must fail closed
+            logger.exception(
+                "stage [%02d] raised while planning; halting all later stages",
+                spec.stage_index,
+            )
+            return False
+
+        if not plan_succeeded or not stage_task.solutions:
             logger.error(
-                "planning failed for stage [%02d] %s",
+                "planning failed for stage [%02d] %s; halting all later stages",
                 spec.stage_index,
                 spec.name,
             )
             return False
-        result = stage_task.execute(stage_task.solutions[0])
+        try:
+            result = stage_task.execute(stage_task.solutions[0])
+        except Exception:  # noqa: BLE001 - execution must fail closed
+            logger.exception(
+                "stage [%02d] raised while executing; halting all later stages",
+                spec.stage_index,
+            )
+            return False
         if not result:
             logger.error(
-                "execution failed for stage [%02d] %s (MoveIt error %s)",
+                "execution failed for stage [%02d] %s (MoveIt error %s); "
+                "halting all later stages",
                 spec.stage_index,
                 spec.name,
                 getattr(result, "val", result),

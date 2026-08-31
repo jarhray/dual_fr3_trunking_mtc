@@ -5,10 +5,23 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    IncludeLaunchDescription,
+    LogInfo,
+    RegisterEventHandler,
+)
 from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration
+from launch.substitutions import (
+    Command,
+    FindExecutable,
+    LaunchConfiguration,
+    NotSubstitution,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -32,6 +45,7 @@ def generate_launch_description():
     left_robot_ip = DeclareLaunchArgument("left_robot_ip", default_value="172.16.0.2")
     right_robot_ip = DeclareLaunchArgument("right_robot_ip", default_value="172.16.0.3")
     load_gripper = DeclareLaunchArgument("load_gripper", default_value="true")
+    start_gripper = DeclareLaunchArgument("start_gripper", default_value="true")
     ee_id = DeclareLaunchArgument("ee_id", default_value="franka_hand")
     use_rviz = DeclareLaunchArgument("use_rviz", default_value="true")
     use_gazebo = DeclareLaunchArgument("use_gazebo", default_value="false")
@@ -92,7 +106,19 @@ def generate_launch_description():
         "execute_stage_by_stage",
         default_value="true",
     )
-    mtc_start_delay = DeclareLaunchArgument("mtc_start_delay", default_value="6.0")
+    readiness_timeout = DeclareLaunchArgument(
+        "readiness_timeout",
+        default_value="60.0",
+    )
+    state_max_age = DeclareLaunchArgument("state_max_age", default_value="0.5")
+    home_grippers_before_execute = DeclareLaunchArgument(
+        "home_grippers_before_execute",
+        default_value="true",
+    )
+    grippers_homed = DeclareLaunchArgument(
+        "grippers_homed",
+        default_value="false",
+    )
     mtc_keep_alive_sec = DeclareLaunchArgument(
         "mtc_keep_alive_sec",
         default_value="30.0",
@@ -167,6 +193,7 @@ def generate_launch_description():
             "left_robot_ip": LaunchConfiguration("left_robot_ip"),
             "right_robot_ip": LaunchConfiguration("right_robot_ip"),
             "load_gripper": LaunchConfiguration("load_gripper"),
+            "start_gripper": LaunchConfiguration("start_gripper"),
             "ee_id": LaunchConfiguration("ee_id"),
             "use_rviz": LaunchConfiguration("use_rviz"),
             "trajectory_execution_duration_scaling": LaunchConfiguration(
@@ -251,9 +278,65 @@ def generate_launch_description():
         ],
     )
 
-    delayed_mtc_node = TimerAction(
-        period=LaunchConfiguration("mtc_start_delay"),
-        actions=[mtc_node],
+    readiness_node = Node(
+        package=trunking_package,
+        executable="trunking_readiness_gate.py",
+        prefix="/usr/bin/python3",
+        output="screen",
+        parameters=[
+            {
+                "execute": ParameterValue(
+                    LaunchConfiguration("execute"), value_type=bool
+                ),
+                "use_fake_hardware": ParameterValue(
+                    LaunchConfiguration("use_fake_hardware"), value_type=bool
+                ),
+                "namespaced_arm_controllers": ParameterValue(
+                    NotSubstitution(LaunchConfiguration("use_gazebo")),
+                    value_type=bool,
+                ),
+                "start_gripper": ParameterValue(
+                    LaunchConfiguration("start_gripper"), value_type=bool
+                ),
+                "home_grippers_before_execute": ParameterValue(
+                    LaunchConfiguration("home_grippers_before_execute"),
+                    value_type=bool,
+                ),
+                "grippers_homed": ParameterValue(
+                    LaunchConfiguration("grippers_homed"), value_type=bool
+                ),
+                "readiness_timeout": ParameterValue(
+                    LaunchConfiguration("readiness_timeout"), value_type=float
+                ),
+                "state_max_age": ParameterValue(
+                    LaunchConfiguration("state_max_age"), value_type=float
+                ),
+            }
+        ],
+    )
+
+    def start_mtc_after_readiness(event, _context):
+        if event.returncode == 0:
+            return [mtc_node]
+        return [
+            LogInfo(
+                msg=(
+                    "[ERROR] The dual FR3 readiness gate failed; "
+                    "the MTC task will not start."
+                )
+            ),
+            EmitEvent(
+                event=Shutdown(
+                    reason="Dual FR3 readiness checks failed."
+                )
+            ),
+        ]
+
+    start_mtc_when_ready = RegisterEventHandler(
+        OnProcessExit(
+            target_action=readiness_node,
+            on_exit=start_mtc_after_readiness,
+        )
     )
 
     return LaunchDescription(
@@ -263,6 +346,7 @@ def generate_launch_description():
             left_robot_ip,
             right_robot_ip,
             load_gripper,
+            start_gripper,
             ee_id,
             use_rviz,
             use_gazebo,
@@ -286,10 +370,14 @@ def generate_launch_description():
             plan,
             execute,
             execute_stage_by_stage,
-            mtc_start_delay,
+            readiness_timeout,
+            state_max_age,
+            home_grippers_before_execute,
+            grippers_homed,
             mtc_keep_alive_sec,
             moveit_demo,
             moveit_gazebo,
-            delayed_mtc_node,
+            start_mtc_when_ready,
+            readiness_node,
         ]
     )

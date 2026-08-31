@@ -172,6 +172,16 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
   execute:=false
 ```
 
+```bash
+ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
+  use_fake_hardware:=false \
+  left_robot_ip:=192.168.1.2 \
+  right_robot_ip:=192.168.2.2 \
+  start_gripper:=true \
+  plan:=true \
+  execute:=true
+```
+
 这个 launch 会同时启动：
 
 - 默认情况下：`dual_fr3_moveit_config/launch/demo.launch.py`
@@ -190,6 +200,10 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 - 启动 MoveIt demo 时给 `move_group` 额外加载
   `move_group/ExecuteTaskSolutionCapability`，这样 `execute:=true` 时
   MTC 的 `task.execute()` 才能连接到 `/execute_task_solution` action server
+- 先启动 `trunking_readiness_gate.py`，等待左右轨迹控制器 Action、左右
+  `controller_state`、完整且新鲜的 14 个机械臂关节状态和 MoveGroup；全部通过后才启动
+  MTC 节点，不再依赖固定启动延时
+- 真机 `execute:=true` 时默认依次 Homing 两个夹爪；任一 Homing 失败都不会启动 MTC
 - `execute:=true` 默认逐 executable stage 重新规划并执行，每段使用真实机器人状态作为下一段起点；设置 `execute_stage_by_stage:=false` 可复现旧的整条 solution 一次性执行方式
 - 通过 `use_gazebo:=true` 可切换到 `dual_fr3_moveit_config/launch/gazebo.launch.py`
   ，让 RViz 直接跟随 Gazebo 里的实际运动显示
@@ -234,7 +248,8 @@ dual_fr3_trunking_mtc/demo.launch.py
 dual_fr3_trunking_mtc/mtc_prototype.launch.py
   -> default include dual_fr3_moveit_config/launch/demo.launch.py
   -> use_gazebo:=true 时 include dual_fr3_moveit_config/launch/gazebo.launch.py
-  -> start trunking_mtc_prototype.py
+  -> start trunking_readiness_gate.py
+  -> readiness checks passed 后 start trunking_mtc_prototype.py
 ```
 
 所以它们是两个并列入口，不是互相调用关系。一般不要在两个终端同时启动
@@ -269,7 +284,11 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `trajectory_execution_goal_margin`：`move_group` 执行 watchdog 的固定时间余量，默认 `5.0`
 - `plan`：是否调用 MTC `task.plan()`，默认 `true`
 - `execute`：是否执行 MTC solution，默认 `false`
-- `mtc_start_delay`：延迟启动 MTC 节点，等待 MoveIt 环境起来，默认 `6.0`
+- `start_gripper`：是否启动左右夹爪驱动；真机执行包含夹爪 stage，因此必须为 `true`
+- `readiness_timeout`：等待控制器、Action Server 和机器人状态的总超时，默认 `60.0` 秒
+- `state_max_age`：`/joint_states` 和控制器状态允许的最大消息年龄，默认 `0.5` 秒
+- `home_grippers_before_execute`：真机执行前是否自动依次 Homing 两个夹爪，默认 `true`
+- `grippers_homed`：关闭自动 Homing 时，由操作者显式确认两个夹爪已经手动 Homing；默认 `false`
 - `mtc_keep_alive_sec`：MTC 节点完成后继续保留 topic publisher 的时间，默认 `30.0`
 - `use_gazebo`：是否切换到 Gazebo 版本的 MoveIt 启动文件，默认 `false`
 - `gz_args`：传给 Gazebo 的参数，默认 `empty.sdf -r`
@@ -378,9 +397,10 @@ MoveIt 返回失败，或者 action 返回成功但实际 TCP 没到目标，都
 关节空间段会把 MoveGroup 规划和 `/execute_trajectory` 执行拆成两个请求，分别打印
 `planning result` 和 `execution result`，用于区分路径规划失败与控制器执行失败。
 
-Gazebo 执行前会等待右臂控制器状态。如果 Gazebo 已退出但 MoveGroup/控制器残留，
-诊断器会立即报错，不再把控制循环停滞误报成某个运动 stage 超时。只有连接真机时
-才使用 `--allow-no-controller-state`。
+逐段诊断器会同时等待左右控制器状态，并自动兼容 Gazebo 的旧话题和真机的命名空间
+话题。如果任一侧状态没有更新，诊断器会立即报错，不再把控制循环停滞误报成某个
+运动 stage 超时。`--allow-no-controller-state` 只保留作特殊诊断旁路，正常真机执行
+不应使用。
 
 当只想验证 MTC 是否能尝试规划，但绝不执行：
 
@@ -408,6 +428,18 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 执行方式，增加 `execute_stage_by_stage:=false`。在 fake hardware 下，RViz 应该能看到双臂状态随控制器执行结果更新。真实硬件调试前
 不要直接把 `execute` 打开；应先确认 `/dual_fr3_trunking_mtc_prototype/stage_sequence_text`
 中的 stage 顺序、group、ik frame 和相对位移都符合预期。
+
+默认逐 stage 执行是 fail-closed：任一 stage 规划失败、执行返回失败或抛出异常时，
+立即终止整个后续 stage 序列，不会继续使用理想状态执行下一段。
+
+真机 `execute:=true` 时默认会自动 Homing 两个夹爪，因此夹爪中必须为空。如果已经手动
+完成 Homing，并且需要先放入线缆再开始任务，应使用：
+
+```bash
+home_grippers_before_execute:=false grippers_homed:=true
+```
+
+如果两个参数都为 `false`，就绪门会拒绝启动 MTC。
 
 如果 RViz 中没有运动，先看终端里有没有：
 

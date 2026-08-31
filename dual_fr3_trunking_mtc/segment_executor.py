@@ -131,18 +131,43 @@ def _load_controller_class():
     return DualFR3LinearController
 
 
-def wait_for_controller_state(controller, timeout: float = 3.0) -> bool:
-    state_received = threading.Event()
-    subscription = controller.create_subscription(
-        JointTrajectoryControllerState,
+CONTROLLER_STATE_TOPICS = {
+    "left": (
+        "/left/left_fr3_arm_controller/controller_state",
+        "/left_fr3_arm_controller/controller_state",
+    ),
+    "right": (
+        "/right/right_fr3_arm_controller/controller_state",
         "/right_fr3_arm_controller/controller_state",
-        lambda _message: state_received.set(),
-        10,
-    )
+    ),
+}
+
+
+def wait_for_controller_states(controller, timeout: float = 3.0) -> bool:
+    state_received = {side: threading.Event() for side in CONTROLLER_STATE_TOPICS}
+    subscriptions = []
+    for side, topics in CONTROLLER_STATE_TOPICS.items():
+        for topic in topics:
+            subscriptions.append(
+                controller.create_subscription(
+                    JointTrajectoryControllerState,
+                    topic,
+                    lambda _message, arm_side=side: (
+                        state_received[arm_side].set()
+                    ),
+                    10,
+                )
+            )
     try:
-        return state_received.wait(timeout)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if all(event.is_set() for event in state_received.values()):
+                return True
+            time.sleep(0.02)
+        return False
     finally:
-        controller.destroy_subscription(subscription)
+        for subscription in subscriptions:
+            controller.destroy_subscription(subscription)
 
 
 class StageRunner:
@@ -569,12 +594,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if (
             not args.plan_only
             and not args.allow_no_controller_state
-            and not wait_for_controller_state(controller)
+            and not wait_for_controller_states(controller)
         ):
             controller.get_logger().error(
-                "Gazebo arm controller state is not updating, so trajectories "
-                "cannot execute. Restart gazebo.launch.py. Use "
-                "--allow-no-controller-state only for real hardware."
+                "Both arm controller states are required, but at least one is "
+                "not updating. Check the namespaced real-hardware controllers "
+                "or the legacy Gazebo controllers."
             )
             return 3
         runner = StageRunner(

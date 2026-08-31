@@ -16,6 +16,10 @@ def generate_launch_description():
     left_robot_ip = DeclareLaunchArgument("left_robot_ip", default_value="172.16.0.2")
     right_robot_ip = DeclareLaunchArgument("right_robot_ip", default_value="172.16.0.3")
     load_gripper = DeclareLaunchArgument("load_gripper", default_value="true")
+    start_gripper = DeclareLaunchArgument(
+        "start_gripper",
+        default_value="true",
+    )
     ee_id = DeclareLaunchArgument("ee_id", default_value="franka_hand")
     use_rviz = DeclareLaunchArgument("use_rviz", default_value="true")
     keypoints_file = DeclareLaunchArgument(
@@ -42,6 +46,7 @@ def generate_launch_description():
             "left_robot_ip": LaunchConfiguration("left_robot_ip"),
             "right_robot_ip": LaunchConfiguration("right_robot_ip"),
             "load_gripper": LaunchConfiguration("load_gripper"),
+            "start_gripper": LaunchConfiguration("start_gripper"),
             "ee_id": LaunchConfiguration("ee_id"),
             "use_rviz": LaunchConfiguration("use_rviz"),
         }.items(),
@@ -71,6 +76,7 @@ def generate_launch_description():
             left_robot_ip,
             right_robot_ip,
             load_gripper,
+            start_gripper,
             ee_id,
             use_rviz,
             keypoints_file,
