@@ -13,7 +13,11 @@ from std_srvs.srv import Trigger
 from visualization_msgs.msg import MarkerArray
 
 from .markers import build_marker_array
-from .models import TaskStep
+from .models import (
+    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    TaskStep,
+)
 from .planner import build_segment_plans, load_keypoints, plan_to_dict
 from .scheduler import build_task_schedule
 
@@ -40,6 +44,14 @@ class TrunkingPlannerNode(Node):
         self.declare_parameter("publish_labels", True)
         self.declare_parameter("initial_leader_index", 1)
         self.declare_parameter("initial_follower_index", 0)
+        self.declare_parameter(
+            "leader_orientation_direction",
+            DEFAULT_LEADER_ORIENTATION_DIRECTION,
+        )
+        self.declare_parameter(
+            "follower_orientation_direction",
+            DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+        )
 
         latched_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.summary_pub = self.create_publisher(String, "~/plan_summary", latched_qos)
@@ -81,9 +93,17 @@ class TrunkingPlannerNode(Node):
         task_frame = str(self.get_parameter("task_frame").value)
         self._keypoints = load_keypoints(keypoints_path, fallback_frame=task_frame)
         samples_per_segment = int(self.get_parameter("samples_per_segment").value)
+        leader_orientation_direction = str(
+            self.get_parameter("leader_orientation_direction").value
+        )
+        follower_orientation_direction = str(
+            self.get_parameter("follower_orientation_direction").value
+        )
         self._segments = build_segment_plans(
             self._keypoints,
             samples_per_segment=samples_per_segment,
+            leader_orientation_direction=leader_orientation_direction,
+            follower_orientation_direction=follower_orientation_direction,
         )
         initial_leader_index = int(self.get_parameter("initial_leader_index").value)
         initial_follower_index = int(self.get_parameter("initial_follower_index").value)

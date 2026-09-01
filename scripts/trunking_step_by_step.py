@@ -15,7 +15,13 @@ from ament_index_python.packages import get_package_prefix
 from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import MultiThreadedExecutor
 
-from dual_fr3_trunking_mtc.models import DEFAULT_LEADER_LEAD_DISTANCE
+from dual_fr3_trunking_mtc.models import (
+    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    DEFAULT_LEADER_LEAD_DISTANCE,
+    DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    ORIENTATION_DIRECTIONS,
+    path_orientation_yaw,
+)
 from dual_fr3_trunking_mtc.planner import load_keypoints
 
 
@@ -32,10 +38,11 @@ def load_controller_class():
     return DualFR3LinearController
 
 
-def yaw_between(start, goal):
-    return math.atan2(
-        goal.position[1] - start.position[1],
+def yaw_between(start, goal, orientation_direction):
+    return path_orientation_yaw(
         goal.position[0] - start.position[0],
+        goal.position[1] - start.position[1],
+        orientation_direction,
     )
 
 
@@ -59,7 +66,14 @@ def stop_gazebo(process):
         process.terminate()
 
 
-def move_ahead(controller, arm, start, goal, lead_distance):
+def move_ahead(
+    controller,
+    arm,
+    start,
+    goal,
+    lead_distance,
+    orientation_direction,
+):
     current = controller.get_current_pose(arm)
     if current is None:
         controller.get_logger().error(f"No current TCP pose for {arm}")
@@ -77,12 +91,19 @@ def move_ahead(controller, arm, start, goal, lead_distance):
         current.position.z + lead_distance * delta_z / distance,
         TOOL_ROLL,
         TOOL_PITCH,
-        yaw_between(start, goal),
+        yaw_between(start, goal, orientation_direction),
         frame_id=start.frame_id,
     )
 
 
-def rotate_toward(controller, arm, frame_id, start, goal):
+def rotate_toward(
+    controller,
+    arm,
+    frame_id,
+    start,
+    goal,
+    orientation_direction,
+):
     current = controller.get_current_pose(arm)
     if current is None:
         controller.get_logger().error(f"No current TCP pose for {arm}")
@@ -95,7 +116,7 @@ def rotate_toward(controller, arm, frame_id, start, goal):
         current.position.z,
         TOOL_ROLL,
         TOOL_PITCH,
-        yaw_between(start, goal),
+        yaw_between(start, goal, orientation_direction),
         frame_id=frame_id,
     )
 
@@ -133,6 +154,18 @@ def main():
         type=float,
         default=DEFAULT_LEADER_LEAD_DISTANCE,
         help="Leader clearance distance in metres (default: 0.10).",
+    )
+    parser.add_argument(
+        "--leader-orientation-direction",
+        choices=ORIENTATION_DIRECTIONS,
+        default=DEFAULT_LEADER_ORIENTATION_DIRECTION,
+        help="Leader TCP path-facing direction (default: reverse).",
+    )
+    parser.add_argument(
+        "--follower-orientation-direction",
+        choices=ORIENTATION_DIRECTIONS,
+        default=DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+        help="Follower TCP path-facing direction (default: forward).",
     )
     args = parser.parse_args()
     if args.leader_lead_distance <= 0.0:
@@ -181,7 +214,12 @@ def main():
                 "follower: current -> entry_0 (OMPL)",
                 lambda: controller.move_to_ompl(
                     "right", *entry_0.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(entry_0, corner_1),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        entry_0,
+                        corner_1,
+                        args.follower_orientation_direction,
+                    ),
                     frame_id=entry_0.frame_id,
                 ),
             ),
@@ -189,7 +227,12 @@ def main():
                 "leader: current -> corner_1 (OMPL)",
                 lambda: controller.move_to_ompl(
                     "left", *corner_1.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(corner_1, corner_2),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        corner_1,
+                        corner_2,
+                        args.leader_orientation_direction,
+                    ),
                     frame_id=corner_1.frame_id,
                 ),
             ),
@@ -202,13 +245,19 @@ def main():
                     corner_1,
                     corner_2,
                     args.leader_lead_distance,
+                    args.leader_orientation_direction,
                 ),
             ),
             (
                 "follower: entry_0 -> corner_1 (OMPL)",
                 lambda: controller.move_to_ompl(
                     "right", *corner_1.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(corner_1, corner_2),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        corner_1,
+                        corner_2,
+                        args.follower_orientation_direction,
+                    ),
                     frame_id=corner_1.frame_id,
                 ),
             ),
@@ -216,7 +265,12 @@ def main():
                 "leader: lead pose -> entry_5 (OMPL)",
                 lambda: controller.move_to_ompl(
                     "left", *entry_5.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(corner_4, entry_5),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        corner_4,
+                        entry_5,
+                        args.leader_orientation_direction,
+                    ),
                     frame_id=entry_5.frame_id,
                 ),
             ),
@@ -224,35 +278,60 @@ def main():
                 "follower: corner_1 -> corner_2 (Cartesian)",
                 lambda: controller.move_to_cartesian(
                     "right", *corner_2.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(corner_1, corner_2),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        corner_1,
+                        corner_2,
+                        args.follower_orientation_direction,
+                    ),
                     frame_id=corner_2.frame_id,
                 ),
             ),
             (
                 "follower: rotate toward corner_3 (Cartesian)",
                 lambda: rotate_toward(
-                    controller, "right", corner_2.frame_id, corner_2, corner_3
+                    controller,
+                    "right",
+                    corner_2.frame_id,
+                    corner_2,
+                    corner_3,
+                    args.follower_orientation_direction,
                 ),
             ),
             (
                 "follower: corner_2 -> corner_3 (Cartesian)",
                 lambda: controller.move_to_cartesian(
                     "right", *corner_3.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(corner_2, corner_3),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        corner_2,
+                        corner_3,
+                        args.follower_orientation_direction,
+                    ),
                     frame_id=corner_3.frame_id,
                 ),
             ),
             (
                 "follower: rotate toward corner_4 (Cartesian)",
                 lambda: rotate_toward(
-                    controller, "right", corner_3.frame_id, corner_3, corner_4
+                    controller,
+                    "right",
+                    corner_3.frame_id,
+                    corner_3,
+                    corner_4,
+                    args.follower_orientation_direction,
                 ),
             ),
             (
                 "follower: corner_3 -> corner_4 (Cartesian)",
                 lambda: controller.move_to_cartesian(
                     "right", *corner_4.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(corner_3, corner_4),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        corner_3,
+                        corner_4,
+                        args.follower_orientation_direction,
+                    ),
                     frame_id=corner_4.frame_id,
                 ),
             ),
@@ -265,13 +344,19 @@ def main():
                     corner_4,
                     entry_5,
                     args.leader_lead_distance,
+                    args.leader_orientation_direction,
                 ),
             ),
             (
                 "follower: corner_4 -> entry_5 (OMPL)",
                 lambda: controller.move_to_ompl(
                     "right", *entry_5.position,
-                    TOOL_ROLL, TOOL_PITCH, yaw_between(corner_4, entry_5),
+                    TOOL_ROLL, TOOL_PITCH,
+                    yaw_between(
+                        corner_4,
+                        entry_5,
+                        args.follower_orientation_direction,
+                    ),
                     frame_id=entry_5.frame_id,
                 ),
             ),

@@ -11,20 +11,46 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import PoseStamped, Vector3, Vector3Stamped
+from geometry_msgs.msg import Pose, PoseStamped, Vector3, Vector3Stamped
+from moveit_msgs.msg import Constraints, PositionConstraint
+from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
 from std_msgs.msg import String
 
 from .models import (
+    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
+    DEFAULT_LEADER_ORIENTATION_DIRECTION,
     DEFAULT_TOOL_PITCH,
     DEFAULT_TOOL_ROLL,
     Keypoint,
+    ORIENTATION_DIRECTIONS,
+    ORIENTATION_DIRECTION_FORWARD,
     TaskStep,
+    path_orientation_yaw,
     rpy_to_quaternion,
+    validate_orientation_direction,
 )
 from .planner import build_segment_plans, load_keypoints
+from .preparation import (
+    PreparationConfig,
+    add_preparation_stages,
+    build_preparation_steps,
+    preparation_sequence_to_text,
+    run_preparation,
+)
 from .scheduler import build_task_schedule
+
+
+OMPL_PIPELINE_NAME = "move_group"
+OMPL_PLANNER_ID = "RRTConnectkConfigDefault"
+OMPL_NUM_PLANNING_ATTEMPTS = 5
+OMPL_MOVE_TO_TIMEOUT = 5.0
+DEFAULT_ANCHOR_MAX_PATH_Z = 0.2
+# PositionConstraint only supports bounded regions. These bounds are deliberately
+# wider than the FR3 reachable workspace so only the upper TCP z limit is active.
+ANCHOR_PATH_CONSTRAINT_MIN_Z = -2.0
+ANCHOR_PATH_CONSTRAINT_XY_SIZE = 4.0
 
 
 @dataclass(frozen=True)
@@ -96,8 +122,15 @@ def _normalize_angle(angle: float) -> float:
     return angle
 
 
-def _yaw_toward(vector: tuple[float, float, float]) -> float:
-    return math.atan2(vector[1], vector[0])
+def _yaw_toward(
+    vector: tuple[float, float, float],
+    orientation_direction: str = ORIENTATION_DIRECTION_FORWARD,
+) -> float:
+    return path_orientation_yaw(
+        vector[0],
+        vector[1],
+        orientation_direction,
+    )
 
 
 def _path_direction(
@@ -113,11 +146,13 @@ def _path_direction(
     return _delta(keypoints[index - 1], keypoints[index])
 
 
-def _path_yaw(keypoints: Sequence[Keypoint], index: int) -> float:
+def _path_yaw(
+    keypoints: Sequence[Keypoint],
+    index: int,
+    orientation_direction: str = ORIENTATION_DIRECTION_FORWARD,
+) -> float:
     direction = _path_direction(keypoints, index)
-    if math.hypot(direction[0], direction[1]) < 1e-9:
-        return 0.0
-    return _yaw_toward(direction)
+    return _yaw_toward(direction, orientation_direction)
 
 
 def _scaled_direction(
@@ -155,18 +190,6 @@ def _pose_at_keypoint(
         _normalize_angle(target_yaw),
     )
     return pose
-
-
-def _hand_group_for_arm_group(arm_group: str) -> str:
-    if arm_group.endswith("_arm"):
-        return f"{arm_group[:-4]}_hand"
-    return f"{arm_group}_hand"
-
-
-def _finger_joint_for_ik_frame(ik_frame: str) -> str:
-    if ik_frame.endswith("hand_tcp"):
-        return f"{ik_frame[:-8]}finger_joint1"
-    return f"{ik_frame}_finger_joint1"
 
 
 def _base_spec_kwargs(
@@ -209,81 +232,6 @@ def _stage_key(
     )
 
 
-def _initial_stage_key(actor: str, goal: Keypoint, primitive: str) -> str:
-    return f"initial:{actor}:current->{goal.name}:{primitive}"
-
-
-def _initial_gripper_close_spec(
-    stage_index: int,
-    actor: str,
-    arm_group: str,
-    ik_frame: str,
-    keypoints: Sequence[Keypoint],
-    goal_index: int,
-) -> MtcStageSpec:
-    goal = keypoints[goal_index]
-    primitive = "close_gripper_at_start"
-    return MtcStageSpec(
-        step_index=-1,
-        stage_index=stage_index,
-        stage_key=_initial_stage_key(actor, goal, primitive),
-        action="initialize",
-        actor=actor,
-        group=_hand_group_for_arm_group(arm_group),
-        ik_frame=ik_frame,
-        name=f"initial_{actor}_close_gripper",
-        from_index=goal_index,
-        to_index=goal_index,
-        from_keypoint="current",
-        to_keypoint=goal.name,
-        frame_id=goal.frame_id,
-        vector=(0.0, 0.0, 0.0),
-        execution_order=[f"{actor}_close_gripper"],
-        primitive=primitive,
-        mtc_stage_type="MoveTo",
-        planner="JointInterpolationPlanner",
-        joint_goal={_finger_joint_for_ik_frame(ik_frame): 0.0},
-        info="close gripper before any arm motion",
-    )
-
-
-def _initial_alignment_spec(
-    stage_index: int,
-    actor: str,
-    group: str,
-    ik_frame: str,
-    keypoints: Sequence[Keypoint],
-    goal_index: int,
-    target_yaw: float,
-) -> MtcStageSpec:
-    goal = keypoints[goal_index]
-    return MtcStageSpec(
-        step_index=-1,
-        stage_index=stage_index,
-        stage_key=_initial_stage_key(actor, goal, "move_to_initial_keypoint"),
-        action="initialize",
-        actor=actor,
-        group=group,
-        ik_frame=ik_frame,
-        name=f"initial_{actor}_move_to_{goal.name}",
-        from_index=goal_index,
-        to_index=goal_index,
-        from_keypoint="current",
-        to_keypoint=goal.name,
-        frame_id=goal.frame_id,
-        vector=(0.0, 0.0, 0.0),
-        execution_order=[f"{actor}_move_to_initial_keypoint"],
-        primitive="move_to_initial_keypoint",
-        mtc_stage_type="MoveTo",
-        planner="JointInterpolationPlanner",
-        target_yaw=target_yaw,
-        info=(
-            "direct joint-space plan from current robot state to the initial "
-            "trunking keypoint using the task tool orientation and path yaw"
-        ),
-    )
-
-
 def _leader_seat_edge_turn_spec(
     stage_index: int,
     step: TaskStep,
@@ -291,12 +239,17 @@ def _leader_seat_edge_turn_spec(
     leader_group: str,
     leader_ik_frame: str,
     current_yaw: float,
+    leader_orientation_direction: str,
 ) -> MtcStageSpec:
     if step.leader_hold_index is None:
         raise ValueError("seat_edge step requires leader_hold_index")
     hold_index = step.leader_hold_index
     hold = keypoints[hold_index]
-    target_yaw = _path_yaw(keypoints, hold_index)
+    target_yaw = _path_yaw(
+        keypoints,
+        hold_index,
+        leader_orientation_direction,
+    )
     yaw_delta = _normalize_angle(target_yaw - current_yaw)
     executable = not math.isclose(yaw_delta, 0.0, abs_tol=1e-6)
     return MtcStageSpec(
@@ -380,11 +333,14 @@ def _leader_seat_edge_lead_spec(
     leader_group: str,
     leader_ik_frame: str,
     leader_lead_distance: float,
+    target_yaw: float,
 ) -> MtcStageSpec:
     if step.leader_hold_index is None:
         raise ValueError("seat_edge step requires leader_hold_index")
     hold_index = step.leader_hold_index
     hold = keypoints[hold_index]
+    # This is a translation along the route. The orientation may be reversed,
+    # but the leader must still move ahead toward the next keypoint.
     lead_vector = _scaled_direction(
         _path_direction(keypoints, hold_index),
         leader_lead_distance,
@@ -411,6 +367,7 @@ def _leader_seat_edge_lead_spec(
         primitive="leader_move_ahead_for_seat_edge",
         mtc_stage_type="MoveRelative",
         planner="CartesianPath",
+        target_yaw=target_yaw,
         info=(
             "leader moves ahead along the cable path to clear the seat-edge "
             "keypoint before follower motion"
@@ -427,62 +384,38 @@ def build_mtc_stage_specs(
     follower_ik_frame: str = "right_fr3_hand_tcp",
     initial_leader_index: int = 1,
     initial_follower_index: int = 0,
-    align_initial_poses: bool = True,
     leader_lead_distance: float = DEFAULT_LEADER_LEAD_DISTANCE,
     min_motion_distance: float = 1e-4,
+    leader_orientation_direction: str = DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    follower_orientation_direction: str = DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
 ) -> List[MtcStageSpec]:
     if leader_lead_distance <= 0.0:
         raise ValueError("leader_lead_distance must be greater than zero")
+    orientation_directions = {
+        "leader": validate_orientation_direction(leader_orientation_direction),
+        "follower": validate_orientation_direction(follower_orientation_direction),
+    }
     specs: List[MtcStageSpec] = []
     actor_yaw = {
         "leader": (
-            _path_yaw(keypoints, initial_leader_index)
+            _path_yaw(
+                keypoints,
+                initial_leader_index,
+                orientation_directions["leader"],
+            )
             if 0 <= initial_leader_index < len(keypoints)
             else 0.0
         ),
         "follower": (
-            _path_yaw(keypoints, initial_follower_index)
+            _path_yaw(
+                keypoints,
+                initial_follower_index,
+                orientation_directions["follower"],
+            )
             if 0 <= initial_follower_index < len(keypoints)
             else 0.0
         ),
     }
-    if len(keypoints) >= 2:
-        specs.append(
-            _initial_gripper_close_spec(
-                len(specs), "follower", follower_group, follower_ik_frame,
-                keypoints, initial_follower_index,
-            )
-        )
-        specs.append(
-            _initial_gripper_close_spec(
-                len(specs), "leader", leader_group, leader_ik_frame,
-                keypoints, initial_leader_index,
-            )
-        )
-        if align_initial_poses:
-            specs.append(
-                _initial_alignment_spec(
-                    len(specs),
-                    "follower",
-                    follower_group,
-                    follower_ik_frame,
-                    keypoints,
-                    initial_follower_index,
-                    actor_yaw["follower"],
-                )
-            )
-            specs.append(
-                _initial_alignment_spec(
-                    len(specs),
-                    "leader",
-                    leader_group,
-                    leader_ik_frame,
-                    keypoints,
-                    initial_leader_index,
-                    actor_yaw["leader"],
-                )
-            )
-
     for step in task_steps:
         actor, from_index, to_index = _index_pair_for_step(step)
         if actor == "none" or from_index is None or to_index is None:
@@ -529,7 +462,11 @@ def build_mtc_stage_specs(
             )
             if terminal_seat_edge:
                 continue
-            leader_target_yaw = _path_yaw(keypoints, step.leader_hold_index)
+            leader_target_yaw = _path_yaw(
+                keypoints,
+                step.leader_hold_index,
+                orientation_directions["leader"],
+            )
             specs.append(
                 _leader_seat_edge_turn_spec(
                     len(specs),
@@ -538,6 +475,7 @@ def build_mtc_stage_specs(
                     leader_group,
                     leader_ik_frame,
                     actor_yaw["leader"],
+                    orientation_directions["leader"],
                 )
             )
             actor_yaw["leader"] = leader_target_yaw
@@ -549,11 +487,15 @@ def build_mtc_stage_specs(
                     leader_group,
                     leader_ik_frame,
                     leader_lead_distance,
+                    leader_target_yaw,
                 )
             )
 
         if step.action in {"straighten", "seat_edge"}:
-            target_yaw = _yaw_toward(vector)
+            target_yaw = _yaw_toward(
+                vector,
+                orientation_directions[actor],
+            )
             yaw_delta = _normalize_angle(target_yaw - actor_yaw[actor])
             turn_executable = not math.isclose(yaw_delta, 0.0, abs_tol=1e-6)
             specs.append(
@@ -578,16 +520,22 @@ def build_mtc_stage_specs(
                     yaw_delta=yaw_delta,
                     target_yaw=target_yaw,
                     info=(
-                        "gripper is already aligned with the next keypoint"
+                        "gripper is already aligned with its configured path "
+                        "orientation"
                         if not turn_executable
                         else "rotate gripper in place with zero TCP "
-                        "translation to face the next keypoint before moving"
+                        "translation to its configured path orientation before "
+                        "moving"
                     ),
                 )
             )
             actor_yaw[actor] = target_yaw
             if step.action == "seat_edge":
-                goal_yaw = _path_yaw(keypoints, to_index)
+                goal_yaw = _path_yaw(
+                    keypoints,
+                    to_index,
+                    orientation_directions[actor],
+                )
                 specs.append(
                     MtcStageSpec(
                         **base,
@@ -609,7 +557,7 @@ def build_mtc_stage_specs(
                         target_yaw=goal_yaw,
                         info=(
                             "follower plans in joint space to the seat-edge "
-                            "keypoint and faces along the outgoing cable path"
+                            "keypoint using its configured path orientation"
                         ),
                     )
                 )
@@ -634,13 +582,18 @@ def build_mtc_stage_specs(
                     primitive="cartesian_move_to_next_keypoint",
                     mtc_stage_type="MoveRelative",
                     planner="CartesianPath",
+                    target_yaw=target_yaw,
                     info="cartesian move to next keypoint with gripper closed",
                 )
             )
             continue
 
         if step.action == "move_anchor":
-            goal_yaw = _path_yaw(keypoints, to_index)
+            goal_yaw = _path_yaw(
+                keypoints,
+                to_index,
+                orientation_directions[actor],
+            )
             specs.append(
                 MtcStageSpec(
                     **base,
@@ -658,11 +611,11 @@ def build_mtc_stage_specs(
                     ),
                     primitive="direct_move_to_next_anchor",
                     mtc_stage_type="MoveTo",
-                    planner="JointInterpolationPlanner",
+                    planner="PipelinePlanner",
                     target_yaw=goal_yaw,
                     info=(
-                        "leader directly plans to the next anchor pose "
-                        "with gripper closed and faces along the cable path"
+                        "leader plans through OMPL to the next anchor pose with "
+                        "gripper closed using its configured path orientation"
                     ),
                 )
             )
@@ -775,6 +728,84 @@ def _import_mtc_modules():
     return rclcpp, core, stages
 
 
+def _create_motion_planners(
+    core,
+    node,
+    cartesian_step_size: float,
+    motion_velocity_scaling: float,
+    motion_acceleration_scaling: float,
+):
+    cartesian = core.CartesianPath()
+    cartesian.step_size = cartesian_step_size
+    cartesian.jump_threshold = 0.0
+    cartesian.max_velocity_scaling_factor = motion_velocity_scaling
+    cartesian.max_acceleration_scaling_factor = motion_acceleration_scaling
+
+    jointspace = core.JointInterpolationPlanner()
+    jointspace.max_velocity_scaling_factor = motion_velocity_scaling
+    jointspace.max_acceleration_scaling_factor = motion_acceleration_scaling
+
+    ompl = core.PipelinePlanner(node, OMPL_PIPELINE_NAME)
+    ompl.planner = OMPL_PLANNER_ID
+    ompl.num_planning_attempts = OMPL_NUM_PLANNING_ATTEMPTS
+    ompl.max_velocity_scaling_factor = motion_velocity_scaling
+    ompl.max_acceleration_scaling_factor = motion_acceleration_scaling
+    return cartesian, jointspace, ompl
+
+
+def _planner_for_move_to(spec: MtcStageSpec, cartesian, jointspace, ompl):
+    planners = {
+        "CartesianPath": cartesian,
+        "JointInterpolationPlanner": jointspace,
+        "PipelinePlanner": ompl,
+    }
+    try:
+        return planners[spec.planner]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported MoveTo planner {spec.planner!r} for stage {spec.name!r}"
+        ) from exc
+
+
+def _max_link_z_path_constraint(
+    frame_id: str,
+    link_name: str,
+    max_z: float,
+) -> Constraints:
+    if not math.isfinite(max_z):
+        raise ValueError("anchor_max_path_z must be finite")
+    if max_z <= ANCHOR_PATH_CONSTRAINT_MIN_Z:
+        raise ValueError(
+            "anchor_max_path_z must be greater than "
+            f"{ANCHOR_PATH_CONSTRAINT_MIN_Z}"
+        )
+
+    height = max_z - ANCHOR_PATH_CONSTRAINT_MIN_Z
+    region = SolidPrimitive()
+    region.type = SolidPrimitive.BOX
+    region.dimensions = [
+        ANCHOR_PATH_CONSTRAINT_XY_SIZE,
+        ANCHOR_PATH_CONSTRAINT_XY_SIZE,
+        height,
+    ]
+
+    region_pose = Pose()
+    region_pose.position.z = ANCHOR_PATH_CONSTRAINT_MIN_Z + 0.5 * height
+    region_pose.orientation.w = 1.0
+
+    position = PositionConstraint()
+    position.header.frame_id = frame_id
+    position.link_name = link_name
+    position.constraint_region.primitives.append(region)
+    position.constraint_region.primitive_poses.append(region_pose)
+    position.weight = 1.0
+
+    constraints = Constraints()
+    constraints.name = f"{link_name}_max_z_{max_z:.3f}"
+    constraints.position_constraints.append(position)
+    return constraints
+
+
 def create_mtc_task(
     node,
     keypoints: Sequence[Keypoint],
@@ -788,27 +819,56 @@ def create_mtc_task(
     motion_acceleration_scaling: float = 0.2,
     initial_leader_index: int = 1,
     initial_follower_index: int = 0,
-    align_initial_poses: bool = True,
     leader_lead_distance: float = DEFAULT_LEADER_LEAD_DISTANCE,
     tool_roll: float = DEFAULT_TOOL_ROLL,
     tool_pitch: float = DEFAULT_TOOL_PITCH,
     selected_stage_indices: set[int] | None = None,
+    leader_orientation_direction: str = DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    follower_orientation_direction: str = DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    anchor_max_path_z: float = DEFAULT_ANCHOR_MAX_PATH_Z,
+    include_preparation: bool = True,
+    preparation_config: PreparationConfig | None = None,
 ):
     _rclcpp, core, stages = _import_mtc_modules()
 
-    cartesian = core.CartesianPath()
-    cartesian.step_size = cartesian_step_size
-    cartesian.jump_threshold = 0.0
-    cartesian.max_velocity_scaling_factor = motion_velocity_scaling
-    cartesian.max_acceleration_scaling_factor = motion_acceleration_scaling
-    jointspace = core.JointInterpolationPlanner()
-    jointspace.max_velocity_scaling_factor = motion_velocity_scaling
-    jointspace.max_acceleration_scaling_factor = motion_acceleration_scaling
+    cartesian, jointspace, ompl = _create_motion_planners(
+        core,
+        node,
+        cartesian_step_size,
+        motion_velocity_scaling,
+        motion_acceleration_scaling,
+    )
 
     task = core.Task()
     task.name = "dual_fr3_trunking_mtc_prototype"
     task.loadRobotModel(node)
     task.add(stages.CurrentState("current_state"))
+
+    if preparation_config is None:
+        preparation_config = PreparationConfig(
+            leader_index=initial_leader_index,
+            follower_index=initial_follower_index,
+            leader_group=leader_group,
+            follower_group=follower_group,
+            leader_ik_frame=leader_ik_frame,
+            follower_ik_frame=follower_ik_frame,
+            leader_orientation_direction=leader_orientation_direction,
+            follower_orientation_direction=follower_orientation_direction,
+            tool_roll=tool_roll,
+            tool_pitch=tool_pitch,
+            cartesian_step_size=cartesian_step_size,
+            velocity_scaling=motion_velocity_scaling,
+            acceleration_scaling=motion_acceleration_scaling,
+        )
+    if include_preparation:
+        add_preparation_stages(
+            task,
+            core,
+            stages,
+            node,
+            keypoints,
+            preparation_config,
+        )
 
     specs = build_mtc_stage_specs(
         keypoints,
@@ -819,8 +879,9 @@ def create_mtc_task(
         follower_ik_frame=follower_ik_frame,
         initial_leader_index=initial_leader_index,
         initial_follower_index=initial_follower_index,
-        align_initial_poses=align_initial_poses,
         leader_lead_distance=leader_lead_distance,
+        leader_orientation_direction=leader_orientation_direction,
+        follower_orientation_direction=follower_orientation_direction,
     )
     for spec in specs:
         if (
@@ -832,12 +893,16 @@ def create_mtc_task(
             continue
 
         if spec.mtc_stage_type == "MoveTo":
-            planner = (
-                cartesian
-                if spec.primitive == "turn_gripper_to_next_keypoint"
-                else jointspace
-            )
+            planner = _planner_for_move_to(spec, cartesian, jointspace, ompl)
             move_to = stages.MoveTo(spec.name, planner)
+            if spec.planner == "PipelinePlanner":
+                move_to.timeout = OMPL_MOVE_TO_TIMEOUT
+            if spec.primitive == "direct_move_to_next_anchor":
+                move_to.path_constraints = _max_link_z_path_constraint(
+                    spec.frame_id,
+                    spec.ik_frame,
+                    anchor_max_path_z,
+                )
             move_to.group = spec.group
             if spec.primitive == "turn_gripper_to_next_keypoint":
                 move_to.ik_frame = _identity_ik_frame(spec.ik_frame)
@@ -852,7 +917,6 @@ def create_mtc_task(
             elif spec.primitive in {
                 "direct_move_to_next_anchor",
                 "direct_move_to_seat_edge_keypoint",
-                "move_to_initial_keypoint",
             }:
                 move_to.ik_frame = _identity_ik_frame(spec.ik_frame)
                 move_to.setGoal(
@@ -910,9 +974,28 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--follower-group", default="right_fr3_arm")
     parser.add_argument("--leader-ik-frame", default="left_fr3_hand_tcp")
     parser.add_argument("--follower-ik-frame", default="right_fr3_hand_tcp")
+    parser.add_argument(
+        "--leader-orientation-direction",
+        choices=ORIENTATION_DIRECTIONS,
+        default=DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    )
+    parser.add_argument(
+        "--follower-orientation-direction",
+        choices=ORIENTATION_DIRECTIONS,
+        default=DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    )
     parser.add_argument("--cartesian-step-size", type=float, default=0.01)
     parser.add_argument("--motion-velocity-scaling", type=float, default=0.2)
     parser.add_argument("--motion-acceleration-scaling", type=float, default=0.2)
+    parser.add_argument(
+        "--anchor-max-path-z",
+        type=float,
+        default=DEFAULT_ANCHOR_MAX_PATH_Z,
+        help=(
+            "maximum TCP z during direct_move_to_next_anchor, measured in "
+            "the keypoint frame"
+        ),
+    )
     parser.add_argument(
         "--leader-lead-distance",
         type=float,
@@ -920,7 +1003,9 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
     )
     parser.add_argument("--tool-roll", type=float, default=DEFAULT_TOOL_ROLL)
     parser.add_argument("--tool-pitch", type=float, default=DEFAULT_TOOL_PITCH)
-    parser.add_argument("--align-initial-poses", type=_parse_bool, default=True)
+    parser.add_argument("--preparation-enabled", type=_parse_bool, default=True)
+    parser.add_argument("--preparation-height", type=float, default=0.15)
+    parser.add_argument("--preparation-interactive", type=_parse_bool, default=True)
     parser.add_argument("--plan", type=_parse_bool, default=True)
     parser.add_argument("--execute", type=_parse_bool, default=False)
     parser.add_argument(
@@ -1046,11 +1131,14 @@ def _execute_stage_by_stage(
                 motion_acceleration_scaling=args.motion_acceleration_scaling,
                 initial_leader_index=args.initial_leader_index,
                 initial_follower_index=args.initial_follower_index,
-                align_initial_poses=args.align_initial_poses,
                 leader_lead_distance=args.leader_lead_distance,
                 tool_roll=args.tool_roll,
                 tool_pitch=args.tool_pitch,
                 selected_stage_indices={spec.stage_index},
+                leader_orientation_direction=args.leader_orientation_direction,
+                follower_orientation_direction=args.follower_orientation_direction,
+                anchor_max_path_z=args.anchor_max_path_z,
+                include_preparation=False,
             )
             plan_succeeded = stage_task.plan()
         except Exception:  # noqa: BLE001 - execution must fail closed
@@ -1094,15 +1182,44 @@ def main(argv: Sequence[str] | None = None) -> int:
     rclcpp, _core, _stages = _import_mtc_modules()
 
     rclcpp.init()
-    node = rclcpp.Node("dual_fr3_trunking_mtc_prototype")
+    node_options = rclcpp.NodeOptions(
+        automatically_declare_parameters_from_overrides=True,
+    )
+    node = rclcpp.Node("dual_fr3_trunking_mtc_prototype", node_options)
     stage_publisher = None
     try:
         keypoints = load_keypoints(args.keypoints_file, fallback_frame=args.task_frame)
-        segments = build_segment_plans(keypoints)
+        segments = build_segment_plans(
+            keypoints,
+            leader_orientation_direction=args.leader_orientation_direction,
+            follower_orientation_direction=args.follower_orientation_direction,
+        )
         task_steps = build_task_schedule(
             keypoints,
             initial_leader_index=args.initial_leader_index,
             initial_follower_index=args.initial_follower_index,
+        )
+        preparation_config = PreparationConfig(
+            leader_index=args.initial_leader_index,
+            follower_index=args.initial_follower_index,
+            approach_height=args.preparation_height,
+            leader_group=args.leader_group,
+            follower_group=args.follower_group,
+            leader_ik_frame=args.leader_ik_frame,
+            follower_ik_frame=args.follower_ik_frame,
+            leader_orientation_direction=args.leader_orientation_direction,
+            follower_orientation_direction=args.follower_orientation_direction,
+            tool_roll=args.tool_roll,
+            tool_pitch=args.tool_pitch,
+            cartesian_step_size=args.cartesian_step_size,
+            velocity_scaling=args.motion_velocity_scaling,
+            acceleration_scaling=args.motion_acceleration_scaling,
+            interactive=args.preparation_interactive,
+        )
+        preparation_steps = (
+            build_preparation_steps(keypoints, preparation_config)
+            if args.preparation_enabled
+            else []
         )
         task, specs = create_mtc_task(
             node,
@@ -1117,21 +1234,76 @@ def main(argv: Sequence[str] | None = None) -> int:
             motion_acceleration_scaling=args.motion_acceleration_scaling,
             initial_leader_index=args.initial_leader_index,
             initial_follower_index=args.initial_follower_index,
-            align_initial_poses=args.align_initial_poses,
             leader_lead_distance=args.leader_lead_distance,
             tool_roll=args.tool_roll,
             tool_pitch=args.tool_pitch,
+            leader_orientation_direction=args.leader_orientation_direction,
+            follower_orientation_direction=args.follower_orientation_direction,
+            anchor_max_path_z=args.anchor_max_path_z,
+            include_preparation=args.preparation_enabled,
+            preparation_config=preparation_config,
         )
 
         logger.info(
-            "loaded %d keypoints, %d segments, %d task steps, %d MTC stages",
+            "loaded %d keypoints, %d segments, %d task steps, "
+            "%d preparation stages and %d formal MTC stages",
             len(keypoints),
             len(segments),
             len(task_steps),
+            len(preparation_steps),
             len(specs),
         )
-        logger.info("MTC stage sequence:\n%s", mtc_stage_sequence_to_text(specs))
+        logger.info(
+            "anchor OMPL path constraint: TCP z <= %.3f m in the keypoint frame",
+            args.anchor_max_path_z,
+        )
+        if preparation_steps:
+            logger.info(
+                "preparation sequence:\n%s",
+                preparation_sequence_to_text(keypoints, preparation_config),
+            )
+        logger.info(
+            "formal MTC stage sequence:\n%s",
+            mtc_stage_sequence_to_text(specs),
+        )
         if args.plan:
+            if args.execute and args.preparation_enabled:
+                if not run_preparation(
+                    node,
+                    _core,
+                    _stages,
+                    keypoints,
+                    preparation_config,
+                    logger,
+                ):
+                    return 3
+                logger.info("preparation completed; starting the formal task")
+                task, specs = create_mtc_task(
+                    node,
+                    keypoints,
+                    task_steps,
+                    leader_group=args.leader_group,
+                    follower_group=args.follower_group,
+                    leader_ik_frame=args.leader_ik_frame,
+                    follower_ik_frame=args.follower_ik_frame,
+                    cartesian_step_size=args.cartesian_step_size,
+                    motion_velocity_scaling=args.motion_velocity_scaling,
+                    motion_acceleration_scaling=args.motion_acceleration_scaling,
+                    initial_leader_index=args.initial_leader_index,
+                    initial_follower_index=args.initial_follower_index,
+                    leader_lead_distance=args.leader_lead_distance,
+                    tool_roll=args.tool_roll,
+                    tool_pitch=args.tool_pitch,
+                    leader_orientation_direction=(
+                        args.leader_orientation_direction
+                    ),
+                    follower_orientation_direction=(
+                        args.follower_orientation_direction
+                    ),
+                    anchor_max_path_z=args.anchor_max_path_z,
+                    include_preparation=False,
+                    preparation_config=preparation_config,
+                )
             full_plan_succeeded = task.plan()
             if full_plan_succeeded:
                 logger.info(

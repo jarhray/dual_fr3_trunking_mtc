@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
@@ -9,12 +8,17 @@ import yaml
 from geometry_msgs.msg import PoseStamped
 
 from .models import (
+    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    DEFAULT_LEADER_ORIENTATION_DIRECTION,
     DEFAULT_TOOL_PITCH,
     DEFAULT_TOOL_ROLL,
     Keypoint,
+    ORIENTATION_DIRECTION_FORWARD,
     SegmentPlan,
     TaskStep,
+    path_orientation_yaw,
     rpy_to_quaternion,
+    validate_orientation_direction,
 )
 
 
@@ -107,12 +111,14 @@ def execution_order_for_action(action: str) -> List[str]:
     ]
 
 
-def _segment_yaw(start: Keypoint, goal: Keypoint) -> float:
+def _segment_yaw(
+    start: Keypoint,
+    goal: Keypoint,
+    orientation_direction: str = ORIENTATION_DIRECTION_FORWARD,
+) -> float:
     delta_x = goal.position[0] - start.position[0]
     delta_y = goal.position[1] - start.position[1]
-    if math.hypot(delta_x, delta_y) < 1e-9:
-        return 0.0
-    return math.atan2(delta_y, delta_x)
+    return path_orientation_yaw(delta_x, delta_y, orientation_direction)
 
 
 def _pose_stamped_at(
@@ -158,8 +164,13 @@ def sample_segment(start: Keypoint, goal: Keypoint, samples: int = 8) -> List[Po
 
 
 def build_segment_plans(
-    keypoints: Sequence[Keypoint], samples_per_segment: int = 8
+    keypoints: Sequence[Keypoint],
+    samples_per_segment: int = 8,
+    leader_orientation_direction: str = DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    follower_orientation_direction: str = DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
 ) -> List[SegmentPlan]:
+    validate_orientation_direction(leader_orientation_direction)
+    validate_orientation_direction(follower_orientation_direction)
     plans: List[SegmentPlan] = []
     if len(keypoints) < 2:
         return plans
@@ -171,9 +182,14 @@ def build_segment_plans(
             f"{start.name} -> {goal.name}",
             f"in_slot: {start.in_slot} -> {goal.in_slot}",
         ]
-        path_yaw = _segment_yaw(start, goal)
-        leader_target = _pose_stamped_at(goal, path_yaw)
-        follower_target = _pose_stamped_at(goal, path_yaw)
+        leader_target = _pose_stamped_at(
+            goal,
+            _segment_yaw(start, goal, leader_orientation_direction),
+        )
+        follower_target = _pose_stamped_at(
+            goal,
+            _segment_yaw(start, goal, follower_orientation_direction),
+        )
         execution_order = execution_order_for_action(action)
         notes.append(f"execution_order: {' -> '.join(execution_order)}")
         plans.append(

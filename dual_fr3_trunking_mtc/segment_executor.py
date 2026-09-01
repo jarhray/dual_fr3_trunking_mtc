@@ -16,10 +16,13 @@ from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import PlanningOptions
 
 from .models import (
+    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
+    DEFAULT_LEADER_ORIENTATION_DIRECTION,
     DEFAULT_TOOL_PITCH,
     DEFAULT_TOOL_ROLL,
     Keypoint,
+    ORIENTATION_DIRECTIONS,
 )
 from .mtc_prototype import MtcStageSpec, build_mtc_stage_specs
 from .planner import load_keypoints
@@ -44,7 +47,6 @@ MOVEIT_ERROR_NAMES = {
     -31: "NO_IK_SOLUTION",
 }
 ARM_PRIMITIVES = {
-    "move_to_initial_keypoint",
     "turn_gripper_to_next_keypoint",
     "leader_move_ahead_for_seat_edge",
     "direct_move_to_seat_edge_keypoint",
@@ -52,7 +54,6 @@ ARM_PRIMITIVES = {
     "direct_move_to_next_anchor",
 }
 DIRECT_PRIMITIVES = {
-    "move_to_initial_keypoint",
     "direct_move_to_seat_edge_keypoint",
     "direct_move_to_next_anchor",
 }
@@ -62,13 +63,7 @@ RELATIVE_PRIMITIVES = {
 }
 
 
-def _vector_yaw(vector: tuple[float, float, float]) -> float:
-    return math.atan2(vector[1], vector[0])
-
-
 def _stage_motion_type(spec: MtcStageSpec) -> str:
-    if spec.primitive == "close_gripper_at_start":
-        return "gripper"
     if spec.primitive == "seat_cable_on_edge":
         return "skip"
     if not spec.executable:
@@ -102,6 +97,8 @@ def build_segment_stages(
     initial_leader_index: int = 1,
     initial_follower_index: int = 0,
     leader_lead_distance: float = DEFAULT_LEADER_LEAD_DISTANCE,
+    leader_orientation_direction: str = DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    follower_orientation_direction: str = DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
 ) -> list[MtcStageSpec]:
     task_steps = build_task_schedule(
         keypoints,
@@ -114,6 +111,8 @@ def build_segment_stages(
         initial_leader_index=initial_leader_index,
         initial_follower_index=initial_follower_index,
         leader_lead_distance=leader_lead_distance,
+        leader_orientation_direction=leader_orientation_direction,
+        follower_orientation_direction=follower_orientation_direction,
     )
 
 
@@ -336,7 +335,7 @@ class StageRunner:
                 current_pose.position.y + spec.vector[1],
                 current_pose.position.z + spec.vector[2],
             )
-            yaw = _vector_yaw(spec.vector)
+            yaw = spec.target_yaw
         else:
             position = self.keypoints[spec.to_index].position
             yaw = spec.target_yaw
@@ -511,6 +510,16 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--initial-leader-index", type=int, default=1)
     parser.add_argument("--initial-follower-index", type=int, default=0)
     parser.add_argument(
+        "--leader-orientation-direction",
+        choices=ORIENTATION_DIRECTIONS,
+        default=DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    )
+    parser.add_argument(
+        "--follower-orientation-direction",
+        choices=ORIENTATION_DIRECTIONS,
+        default=DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    )
+    parser.add_argument(
         "--leader-lead-distance",
         type=float,
         default=DEFAULT_LEADER_LEAD_DISTANCE,
@@ -550,6 +559,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         initial_leader_index=args.initial_leader_index,
         initial_follower_index=args.initial_follower_index,
         leader_lead_distance=args.leader_lead_distance,
+        leader_orientation_direction=args.leader_orientation_direction,
+        follower_orientation_direction=args.follower_orientation_direction,
     )
     selected = [
         spec

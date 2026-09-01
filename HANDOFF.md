@@ -114,48 +114,63 @@ entry_5  [0.364, -0.070, 0.150]  out of slot
 - 相邻点必须在同一 frame。
 - 点只描述位置和语义，不描述方向。
 - YAML 中不要添加 `rpy`，加载器会拒绝。
-- 普通点朝下一个点，最后一点朝上一段的进入方向。
-- 默认工具姿态为 `roll=pi`、`pitch=0`，yaw 由相邻点连线计算。
+- 默认工具姿态为 `roll=pi`、`pitch=0`，yaw 由相邻点连线和 actor 的
+  `orientation_direction` 共同计算。
+- `forward` 表示沿关键点索引递增方向，`reverse` 表示反向。leader 默认
+  `reverse`（下一个点指向上一个点），follower 默认 `forward`（上一个点指向
+  下一个点）。
 - `false -> false` 和 `true -> true` 分类为 `straighten`。
 - `false -> true` 或 `true -> false` 分类为 `seat_edge`。
 
 ## 5. 调度逻辑
 
-默认初始化索引：`initial_leader_index=1`、`initial_follower_index=0`。
+默认准备位置索引：`initial_leader_index=1`、`initial_follower_index=0`。
 按当前 YAML 中启用的关键点，这对应 leader=`corner_2`、follower=`corner_1`。
 
-初始化顺序固定为：
+正式任务开始前的准备动作位于独立模块
+`dual_fr3_trunking_mtc/preparation.py`，顺序固定为：
 
-1. follower：先闭合夹爪。
-2. leader：再闭合夹爪。
-3. follower：当前状态 -> `corner_1`。
-4. leader：当前状态 -> `corner_2`。
+1. leader：使用 OMPL 从当前状态移动到 `corner_2` 上方 `0.15 m`。
+2. follower：使用 OMPL 从当前状态移动到 `corner_1` 上方 `0.15 m`。
+3. 等待键盘确认，闭合 leader 夹爪。
+4. 等待键盘确认，闭合 follower 夹爪。
+5. 等待键盘确认，通过 MTC `Merger` 让双臂 TCP 沿 Cartesian 直线同步向下
+   `0.15 m`。
+
+`execute:=true` 时这五步逐步从最新机器人状态规划和执行，准备完成后再规划正式
+任务。`execute:=false` 时准备动作和正式任务仍会组合成一条 MTC 任务用于 RViz
+预览。
 
 后续调度规则是：当 follower 的下一段属于 `straighten` 且 leader 已在前方时，先让 leader 跳到下一个 anchor，再由 follower 追赶拉直；`seat_edge` 则先执行 leader 让位和 follower 卡线。当前是运动学近似，不包含下压、接触检测、力控、视觉或线缆张力反馈。
 
 ## 6. 当前 MTC stage 映射
 
-文件：`dual_fr3_trunking_mtc/mtc_prototype.py`。
+准备动作文件：`dual_fr3_trunking_mtc/preparation.py`；正式任务 stage 文件：
+`dual_fr3_trunking_mtc/mtc_prototype.py`。
 
 ```text
-close_gripper_at_start:             MoveTo(hand group) + JointInterpolationPlanner
+leader/follower initial approach:  MoveTo + PipelinePlanner (OMPL RRTConnect)
+leader/follower close gripper:     MoveTo(hand group) + JointInterpolationPlanner
+dual Cartesian descent:            Merger[MoveRelative(CartesianPath) x 2]
 seat_cable_on_edge:                 InfoOnly 占位（当前不发运动命令）
-move_to_initial_keypoint:          MoveTo + JointInterpolationPlanner
 leader_move_ahead_for_seat_edge:   MoveRelative + CartesianPath
 turn_gripper_to_next_keypoint:     MoveTo(PoseStamped) + CartesianPath
 cartesian_move_to_next_keypoint:   MoveRelative + CartesianPath
-direct_move_to_next_anchor:        MoveTo + JointInterpolationPlanner
+direct_move_to_next_anchor:        MoveTo + PipelinePlanner (OMPL RRTConnect，TCP z 上限可配置)
 direct_move_to_seat_edge_keypoint: MoveTo + JointInterpolationPlanner
 ```
 
-夹爪只在初始化阶段各闭合一次；后续所有机械臂 stage 默认依赖夹爪保持闭合，
+夹爪只在准备阶段各闭合一次；后续所有机械臂 stage 默认依赖夹爪保持闭合，
 不再在每个动作前重复发送闭合命令。
 
 终段特殊规则：当 leader 已在最后关键点、follower 在倒数第二个关键点时，
 先保留 `seat_cable_on_edge` 卡线占位动作，然后跳过当前代码中的 leader 让位、
 follower 转向和 follower 移动。
 
-原地转向目标使用当前转弯关键点 xyz 和下一段 yaw，意图是保持 TCP xyz 不变，只改变姿态。它比旧的 `MoveRelative + TwistStamped(angular.z=...)` 语义更明确，但仍可能因 Cartesian IK、碰撞或奇异位形失败。
+原地转向目标使用当前转弯关键点 xyz，以及按 actor 的 `orientation_direction`
+计算的路径 yaw，意图是保持 TCP xyz 不变，只改变姿态。它比旧的
+`MoveRelative + TwistStamped(angular.z=...)` 语义更明确，但仍可能因 Cartesian IK、
+碰撞或奇异位形失败。
 
 ## 7. 已知失败证据
 
@@ -339,10 +354,12 @@ execute_stage_by_stage=true, start_gripper=true
 initial_leader_index=1, initial_follower_index=0
 leader_group=left_fr3_arm, follower_group=right_fr3_arm
 leader_ik_frame=left_fr3_hand_tcp, follower_ik_frame=right_fr3_hand_tcp
+leader_orientation_direction=reverse, follower_orientation_direction=forward
 motion_velocity_scaling=0.2, motion_acceleration_scaling=0.2
 leader_lead_distance=0.10
 tool_roll=pi, tool_pitch=0.0
-align_initial_poses=true
+preparation_enabled=true, preparation_height=0.15
+preparation_interactive=true
 trajectory_execution_duration_scaling=10.0
 trajectory_execution_goal_margin=5.0
 readiness_timeout=60.0, state_max_age=0.5
@@ -351,6 +368,13 @@ mtc_keep_alive_sec=30.0
 ```
 
 `leader_lead_distance:=0.10` 是让位距离，不是速度参数。
+
+如需让 leader 恢复旧版的正向朝向：
+
+```bash
+ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
+  leader_orientation_direction:=forward
+```
 
 ## 11. 推荐排查顺序
 

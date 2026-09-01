@@ -68,6 +68,14 @@ def generate_launch_description():
         "follower_ik_frame",
         default_value="right_fr3_hand_tcp",
     )
+    leader_orientation_direction = DeclareLaunchArgument(
+        "leader_orientation_direction",
+        default_value="reverse",
+    )
+    follower_orientation_direction = DeclareLaunchArgument(
+        "follower_orientation_direction",
+        default_value="forward",
+    )
     motion_velocity_scaling = DeclareLaunchArgument(
         "motion_velocity_scaling",
         default_value="0.2",
@@ -75,6 +83,14 @@ def generate_launch_description():
     motion_acceleration_scaling = DeclareLaunchArgument(
         "motion_acceleration_scaling",
         default_value="0.2",
+    )
+    anchor_max_path_z = DeclareLaunchArgument(
+        "anchor_max_path_z",
+        default_value="0.4",
+        description=(
+            "Maximum TCP z in the keypoint frame during "
+            "direct_move_to_next_anchor"
+        ),
     )
     leader_lead_distance = DeclareLaunchArgument(
         "leader_lead_distance",
@@ -88,9 +104,19 @@ def generate_launch_description():
         "tool_pitch",
         default_value="0.0",
     )
-    align_initial_poses = DeclareLaunchArgument(
-        "align_initial_poses",
+    preparation_enabled = DeclareLaunchArgument(
+        "preparation_enabled",
         default_value="true",
+    )
+    preparation_height = DeclareLaunchArgument(
+        "preparation_height",
+        default_value="0.05",
+        description="Vertical approach and synchronized descent distance",
+    )
+    preparation_interactive = DeclareLaunchArgument(
+        "preparation_interactive",
+        default_value="true",
+        description="Require keyboard confirmation for gripping and descent",
     )
     trajectory_execution_duration_scaling = DeclareLaunchArgument(
         "trajectory_execution_duration_scaling",
@@ -177,6 +203,8 @@ def generate_launch_description():
                 "default_planner_request_adapters/FixStartStatePathConstraints"
             ),
             "start_state_max_bounds_error": 0.1,
+            "path_tolerance": 0.001,
+            "resample_dt": 0.02,
         }
     }
     ompl_planning_yaml = load_yaml(moveit_package, "config/ompl_planning.yaml")
@@ -255,18 +283,28 @@ def generate_launch_description():
             LaunchConfiguration("leader_ik_frame"),
             "--follower-ik-frame",
             LaunchConfiguration("follower_ik_frame"),
+            "--leader-orientation-direction",
+            LaunchConfiguration("leader_orientation_direction"),
+            "--follower-orientation-direction",
+            LaunchConfiguration("follower_orientation_direction"),
             "--motion-velocity-scaling",
             LaunchConfiguration("motion_velocity_scaling"),
             "--motion-acceleration-scaling",
             LaunchConfiguration("motion_acceleration_scaling"),
+            "--anchor-max-path-z",
+            LaunchConfiguration("anchor_max_path_z"),
             "--leader-lead-distance",
             LaunchConfiguration("leader_lead_distance"),
             "--tool-roll",
             LaunchConfiguration("tool_roll"),
             "--tool-pitch",
             LaunchConfiguration("tool_pitch"),
-            "--align-initial-poses",
-            LaunchConfiguration("align_initial_poses"),
+            "--preparation-enabled",
+            LaunchConfiguration("preparation_enabled"),
+            "--preparation-height",
+            LaunchConfiguration("preparation_height"),
+            "--preparation-interactive",
+            LaunchConfiguration("preparation_interactive"),
             "--plan",
             LaunchConfiguration("plan"),
             "--execute",
@@ -359,12 +397,17 @@ def generate_launch_description():
             follower_group,
             leader_ik_frame,
             follower_ik_frame,
+            leader_orientation_direction,
+            follower_orientation_direction,
             motion_velocity_scaling,
             motion_acceleration_scaling,
+            anchor_max_path_z,
             leader_lead_distance,
             tool_roll,
             tool_pitch,
-            align_initial_poses,
+            preparation_enabled,
+            preparation_height,
+            preparation_interactive,
             trajectory_execution_duration_scaling,
             trajectory_execution_goal_margin,
             plan,

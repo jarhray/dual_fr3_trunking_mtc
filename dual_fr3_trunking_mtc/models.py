@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import cos, pi, sin
+from math import atan2, cos, hypot, pi, sin
 from typing import Any, Dict, List, Optional, Tuple
 
 from geometry_msgs.msg import PoseStamped, Quaternion
@@ -10,6 +10,38 @@ from geometry_msgs.msg import PoseStamped, Quaternion
 DEFAULT_TOOL_ROLL = pi
 DEFAULT_TOOL_PITCH = 0.0
 DEFAULT_LEADER_LEAD_DISTANCE = 0.10
+ORIENTATION_DIRECTION_FORWARD = "forward"
+ORIENTATION_DIRECTION_REVERSE = "reverse"
+ORIENTATION_DIRECTIONS = (
+    ORIENTATION_DIRECTION_FORWARD,
+    ORIENTATION_DIRECTION_REVERSE,
+)
+DEFAULT_LEADER_ORIENTATION_DIRECTION = ORIENTATION_DIRECTION_REVERSE
+DEFAULT_FOLLOWER_ORIENTATION_DIRECTION = ORIENTATION_DIRECTION_FORWARD
+
+
+def validate_orientation_direction(direction: str) -> str:
+    if direction not in ORIENTATION_DIRECTIONS:
+        expected = ", ".join(ORIENTATION_DIRECTIONS)
+        raise ValueError(
+            f"orientation direction must be one of: {expected}; got {direction!r}"
+        )
+    return direction
+
+
+def path_orientation_yaw(
+    delta_x: float,
+    delta_y: float,
+    direction: str = ORIENTATION_DIRECTION_FORWARD,
+) -> float:
+    """Return path yaw, optionally facing opposite the increasing point order."""
+    validate_orientation_direction(direction)
+    if hypot(delta_x, delta_y) < 1e-9:
+        return 0.0
+    if direction == ORIENTATION_DIRECTION_REVERSE:
+        delta_x = -delta_x
+        delta_y = -delta_y
+    return atan2(delta_y, delta_x)
 
 
 def rpy_to_quaternion(roll: float, pitch: float, yaw: float) -> Quaternion:

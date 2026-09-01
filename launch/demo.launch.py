@@ -9,6 +9,11 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from dual_fr3_trunking_mtc.models import (
+    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    DEFAULT_LEADER_ORIENTATION_DIRECTION,
+)
+
 
 def generate_launch_description():
     use_fake_hardware = DeclareLaunchArgument("use_fake_hardware", default_value="true")
@@ -29,6 +34,14 @@ def generate_launch_description():
         ),
     )
     task_frame = DeclareLaunchArgument("task_frame", default_value="left_fr3_link0")
+    leader_orientation_direction = DeclareLaunchArgument(
+        "leader_orientation_direction",
+        default_value=DEFAULT_LEADER_ORIENTATION_DIRECTION,
+    )
+    follower_orientation_direction = DeclareLaunchArgument(
+        "follower_orientation_direction",
+        default_value=DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+    )
     keypoint_marker_scale = DeclareLaunchArgument("keypoint_marker_scale", default_value="0.02")
     segment_line_width = DeclareLaunchArgument("segment_line_width", default_value="0.015")
     marker_z_offset = DeclareLaunchArgument("marker_z_offset", default_value="0.0")
@@ -61,6 +74,12 @@ def generate_launch_description():
             {
                 "keypoints_file": LaunchConfiguration("keypoints_file"),
                 "task_frame": LaunchConfiguration("task_frame"),
+                "leader_orientation_direction": LaunchConfiguration(
+                    "leader_orientation_direction"
+                ),
+                "follower_orientation_direction": LaunchConfiguration(
+                    "follower_orientation_direction"
+                ),
                 "keypoint_marker_scale": LaunchConfiguration("keypoint_marker_scale"),
                 "segment_line_width": LaunchConfiguration("segment_line_width"),
                 "marker_z_offset": LaunchConfiguration("marker_z_offset"),
@@ -81,6 +100,8 @@ def generate_launch_description():
             use_rviz,
             keypoints_file,
             task_frame,
+            leader_orientation_direction,
+            follower_orientation_direction,
             keypoint_marker_scale,
             segment_line_width,
             marker_z_offset,

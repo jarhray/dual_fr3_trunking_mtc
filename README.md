@@ -119,8 +119,11 @@ keypoints:
 - `role`：人工标注的语义标签，目前主要用于阅读和调试
 
 关键点不包含方向。夹爪 roll/pitch 是任务级工具姿态，yaw 由当前点与相邻点的
-连线方向自动生成。YAML 中出现点级 `rpy` 会直接报错，避免位置数据携带隐藏姿态。
-当前版本只依赖 `in_slot` 做动作判断，其他语义以后再扩展。
+连线自动生成，再按每只机械臂的方向参数决定正反。`forward` 表示沿关键点索引递增
+方向，`reverse` 表示朝相反方向。默认 leader 使用 `reverse`，即由下一个点指向
+上一个点；follower 使用 `forward`，即由上一个点指向下一个点。YAML 中出现点级
+`rpy` 会直接报错，避免位置数据携带隐藏姿态。当前版本只依赖 `in_slot` 做动作判断，
+其他语义以后再扩展。
 
 ## 运行方式
 
@@ -214,31 +217,33 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 当前手动规定的 action primitive 是：
 
 ```text
-initialize:
-  MoveTo(left_fr3_hand/right_fr3_hand): follower、leader 在任何机械臂运动前先闭合夹爪
-  MoveTo(JointInterpolationPlanner): follower 使用任务工具姿态和路径 yaw 到第一个关键点
-  MoveTo(JointInterpolationPlanner): leader 使用任务工具姿态和路径 yaw 到第二个关键点
+preparation（独立模块 dual_fr3_trunking_mtc/preparation.py）：
+  MoveTo(PipelinePlanner / OMPL RRTConnect): leader 到第二个关键点上方 0.15 m
+  MoveTo(PipelinePlanner / OMPL RRTConnect): follower 到第一个关键点上方 0.15 m
+  键盘确认后 MoveTo(left_fr3_hand): 闭合 leader 夹爪
+  键盘确认后 MoveTo(right_fr3_hand): 闭合 follower 夹爪
+  键盘确认后 Merger[MoveRelative(CartesianPath) x 2]: 双臂同步向下 0.15 m
 
 seat_edge:
   InfoOnly(seat_cable_on_edge): 先执行物理卡线动作（当前为占位，不发运动命令）
   MoveTo(PoseStamped, CartesianPath): leader 保持 TCP xyz 不变，原地转向路径切向
   MoveRelative(CartesianPath): leader 沿卡线目标点的路径切向前移 10 cm
-  MoveTo(PoseStamped, CartesianPath): follower 保持 TCP xyz 不变，原地朝卡线目标点转向
+  MoveTo(PoseStamped, CartesianPath): follower 保持 TCP xyz 不变，按配置的路径方向转向
   MoveTo(JointInterpolationPlanner): follower 直接规划到卡线目标点
 
 straighten:
-  MoveTo(PoseStamped, CartesianPath): 夹爪保持 TCP xyz 不变，原地转向下一个关键点
+  MoveTo(PoseStamped, CartesianPath): 夹爪保持 TCP xyz 不变，按配置的路径方向转向
   MoveRelative(CartesianPath): Cartesian 移动到下一个关键点
 
 move_anchor:
-  MoveTo(JointInterpolationPlanner): leader 直接规划移动到下一个 anchor 关键点
+  MoveTo(PipelinePlanner / OMPL RRTConnect): leader 绕障规划到下一个 anchor 关键点
 ```
 
-初始化和后续目标都不读取点级方向：roll/pitch 使用任务级工具姿态，yaw 根据路径
-几何生成。后续独立转向使用当前关键点 xyz 和目标 yaw 的 PoseStamped，
+准备动作和后续目标都不读取点级方向：roll/pitch 使用任务级工具姿态，yaw 根据路径
+几何及当前 actor 的 `orientation_direction` 生成。后续独立转向使用当前关键点 xyz 和目标 yaw 的 PoseStamped，
 由 CartesianPath 保持转向过程中 TCP 的 xyz 不变。规划器分别跟踪 leader/follower 当前 yaw，只执行到目标方向所需的最短
-转角，已经对准的转向 stage 不发送轨迹。普通点朝向下一点，最后一点沿上一段的进入
-方向。leader 的 10 cm 让位只在 `seat_edge` 中出现，
+转角，已经对准的转向 stage 不发送轨迹。`forward` 沿关键点递增方向，`reverse`
+朝相反方向；默认 leader=`reverse`、follower=`forward`。leader 的 10 cm 让位只在 `seat_edge` 中出现，
 `straighten` 和 `move_anchor` 的动作逻辑保持不变。
 
 它和 `dual_fr3_moveit_config/launch/demo.launch.py` / `gazebo.launch.py` 的关系是：
@@ -273,13 +278,18 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `task_frame`：关键点 YAML 未显式写 `default_frame` 时使用的任务坐标系
 - `initial_leader_index`：任务调度器的 leader 初始关键点 index，默认 `1`
 - `initial_follower_index`：任务调度器的 follower 初始关键点 index，默认 `0`
-- `align_initial_poses`：执行任务最开始是否先把 follower/leader 直接规划到初始关键点，默认 `true`
+- `preparation_enabled`：是否在正式任务前执行准备动作模块，默认 `true`
+- `preparation_height`：leader/follower 初始悬停高度及随后同步下降距离，默认 `0.15` m
+- `preparation_interactive`：夹爪闭合和双臂下降前是否等待键盘确认，默认 `true`
 - `leader_group`：leader 使用的 MoveIt planning group，默认 `left_fr3_arm`
 - `follower_group`：follower 使用的 MoveIt planning group，默认 `right_fr3_arm`
 - `leader_ik_frame`：leader TCP / IK frame，默认 `left_fr3_hand_tcp`
 - `follower_ik_frame`：follower TCP / IK frame，默认 `right_fr3_hand_tcp`
+- `leader_orientation_direction`：leader TCP yaw 相对路径的方向，`forward` 沿关键点递增方向、`reverse` 反向，默认 `reverse`
+- `follower_orientation_direction`：follower TCP yaw 相对路径的方向，取值含义同上，默认 `forward`
 - `motion_velocity_scaling`：MTC 运动速度缩放，默认 `0.2`
 - `motion_acceleration_scaling`：MTC 运动加速度缩放，默认 `0.2`
+- `anchor_max_path_z`：`direct_move_to_next_anchor` 的 OMPL 路径中，leader TCP 在关键点坐标系下允许的最大 z，默认 `0.3` m
 - `leader_lead_distance`：`seat_edge` 前 leader 沿路径切向让位的距离，默认 `0.10` m
 - `tool_roll`：任务级 TCP roll，默认 `π`，使夹爪朝向工作面
 - `tool_pitch`：任务级 TCP pitch，默认 `0.0`
@@ -295,6 +305,45 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `mtc_keep_alive_sec`：MTC 节点完成后继续保留 topic publisher 的时间，默认 `30.0`
 - `use_gazebo`：是否切换到 Gazebo 版本的 MoveIt 启动文件，默认 `false`
 - `gz_args`：传给 Gazebo 的参数，默认 `empty.sdf -r`
+
+例如，在 Gazebo 中执行默认准备流程和正式任务：
+
+```bash
+ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
+  use_gazebo:=true \
+  plan:=true \
+  execute:=true \
+  preparation_height:=0.15 \
+  preparation_interactive:=true
+```
+
+两次上方定位会自动规划并执行。随后终端会依次提示闭合 leader、闭合 follower
+以及双臂同步下降；每次按 Enter 继续，输入 `q` 中止。终端没有可用标准输入时，
+交互模式会安全中止，不会自动执行确认动作。设置
+`preparation_interactive:=false` 可关闭这三个确认。
+
+在 `execute:=false` 的预览模式中，准备动作和正式任务会构建为一条 MTC 任务供
+RViz 检查；实际执行时准备模块逐步从机器人最新状态重新规划并执行，完成后再从
+最新状态规划正式任务。双臂下降由一个 MTC `Merger` 同步合并左右 Cartesian
+轨迹，而不是顺序执行两个独立的单臂下降命令。
+
+例如，把 anchor 阶段整个 OMPL 路径中的 leader TCP 高度限制为 `0.15 m`：
+
+```bash
+ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
+  anchor_max_path_z:=0.15
+```
+
+该高度使用 anchor 关键点的 `frame_id`（当前为 `left_fr3_link0`）测量，只约束
+leader TCP 原点，不会错误地要求机械臂的所有连杆都低于这个高度。起点和终点本身也必须
+满足该限制，否则 OMPL 不会找到路径。
+
+如需让 leader 恢复旧版的正向朝向，可运行：
+
+```bash
+ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
+  leader_orientation_direction:=forward
+```
 
 调试阶段推荐：
 
@@ -336,6 +385,8 @@ ros2 run dual_fr3_trunking_mtc trunking_step_by_step.py
 脚本只调用 `DualFR3LinearController` 已有的 `move_to_ompl()` 和
 `move_to_cartesian()`。按回车执行当前动作，输入 `s` 跳过，输入 `q` 退出；使用
 `--start-step 6` 可以直接从指定编号开始，前提是机械臂已经处于该动作要求的起始位姿。
+逐动作脚本和 `trunking_segment_executor.py` 都支持同名参数
+`--leader-orientation-direction`、`--follower-orientation-direction`。
 
 当 MTC 能规划完整 solution、但整条轨迹执行失败时，可以绕过 MTC 的整任务执行接口，
 直接复用 `dual_fr3_moveit_config/scripts/fr3_controller.py` 和
@@ -612,11 +663,12 @@ ros2 service call /dual_fr3_trunking_planner/replan std_srvs/srv/Trigger {}
 - `in_slot` 段级动作分类
 - 段级 waypoint 插值
 - leader/follower 全局任务调度
-- MTC 原型 stage 构建：开头先展开为 follower/leader close-gripper，随后可选 `initialize` 直接规划到初始关键点；
-  `seat_edge` 再展开为 leader Cartesian 让位 + follower turn/direct MoveTo，
+- 独立准备动作模块：双臂依次到初始关键点上方，依次确认闭合夹爪，再通过
+  MTC `Merger` 合并为同步双臂 Cartesian 下移；准备完成后才进入正式任务
+- MTC 原型正式 stage 构建：`seat_edge` 展开为 leader Cartesian 让位 + follower turn/direct MoveTo，
   `straighten` 展开为
   Cartesian in-place turn + Cartesian move，`move_anchor` 展开为
-  JointInterpolationPlanner direct MoveTo
+  PipelinePlanner / OMPL RRTConnect MoveTo
 - 终段 `seat_edge`：当 leader 已在最后关键点、follower 位于倒数第二个关键点时，
   只保留卡线占位动作，跳过现有两臂让位、转向和移动
 - 规划摘要发布
