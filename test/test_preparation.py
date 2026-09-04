@@ -224,7 +224,9 @@ def test_interactive_preparation_prompts_only_for_gripping_and_descent(
         _keypoints,
         _config,
         selected_step_keys,
+        gripper_profiles,
     ):
+        assert gripper_profiles is None
         created_steps.append(next(iter(selected_step_keys)))
         return FakeTask(), []
 

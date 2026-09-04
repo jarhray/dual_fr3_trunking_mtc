@@ -7,6 +7,7 @@ from typing import Callable, Sequence
 from geometry_msgs.msg import Pose, PoseStamped, Vector3, Vector3Stamped
 from std_msgs.msg import Header
 
+from .gripper import GripperProfileRegistry, GripperRequest
 from .models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_ORIENTATION_DIRECTION,
@@ -56,6 +57,8 @@ class PreparationConfig:
     ompl_planning_attempts: int = 5
     ompl_timeout: float = 5.0
     interactive: bool = True
+    leader_gripper_profile: str = "cable_tip"
+    follower_gripper_profile: str = "close_empty"
 
 
 @dataclass(frozen=True)
@@ -235,10 +238,15 @@ def _gripper_close_stage(
     name: str,
     arm_group: str,
     ik_frame: str,
+    profile_name: str,
+    gripper_profiles: GripperProfileRegistry | None,
 ):
     move = stages.MoveTo(name, planner)
     move.group = _hand_group_for_arm_group(arm_group)
-    move.setGoal({_finger_joint_for_ik_frame(ik_frame): 0.0})
+    finger_position = 0.0
+    if gripper_profiles is not None:
+        finger_position = gripper_profiles.get(profile_name).finger_joint_position
+    move.setGoal({_finger_joint_for_ik_frame(ik_frame): finger_position})
     return move
 
 
@@ -288,6 +296,7 @@ def add_preparation_stages(
     keypoints: Sequence[Keypoint],
     config: PreparationConfig,
     selected_step_keys: set[str] | None = None,
+    gripper_profiles: GripperProfileRegistry | None = None,
 ) -> list[PreparationStep]:
     steps = build_preparation_steps(keypoints, config)
     known_keys = {step.key for step in steps}
@@ -346,6 +355,8 @@ def add_preparation_stages(
                     "preparation_leader_close_gripper",
                     config.leader_group,
                     config.leader_ik_frame,
+                    config.leader_gripper_profile,
+                    gripper_profiles,
                 )
             )
         elif step.key == FOLLOWER_CLOSE:
@@ -356,6 +367,8 @@ def add_preparation_stages(
                     "preparation_follower_close_gripper",
                     config.follower_group,
                     config.follower_ik_frame,
+                    config.follower_gripper_profile,
+                    gripper_profiles,
                 )
             )
         elif step.key == DUAL_DESCENT:
@@ -370,6 +383,7 @@ def create_preparation_task(
     keypoints: Sequence[Keypoint],
     config: PreparationConfig,
     selected_step_keys: set[str] | None = None,
+    gripper_profiles: GripperProfileRegistry | None = None,
 ):
     task = core.Task()
     task.name = "dual_fr3_trunking_preparation"
@@ -383,6 +397,7 @@ def create_preparation_task(
         keypoints,
         config,
         selected_step_keys=selected_step_keys,
+        gripper_profiles=gripper_profiles,
     )
     return task, steps
 
@@ -442,6 +457,8 @@ def run_preparation(
     config: PreparationConfig,
     logger,
     input_fn: Callable[[str], str] = _read_controlling_terminal,
+    gripper_controller=None,
+    gripper_profiles: GripperProfileRegistry | None = None,
 ) -> bool:
     steps = build_preparation_steps(keypoints, config)
     for index, step in enumerate(steps, start=1):
@@ -455,6 +472,32 @@ def run_preparation(
             len(steps),
             step.description,
         )
+        if step.key in {LEADER_CLOSE, FOLLOWER_CLOSE} and gripper_controller is not None:
+            actor = "leader" if step.key == LEADER_CLOSE else "follower"
+            profile = (
+                config.leader_gripper_profile
+                if actor == "leader"
+                else config.follower_gripper_profile
+            )
+            try:
+                if not gripper_controller.execute(
+                    GripperRequest(actor=actor, profile=profile)
+                ):
+                    logger.error(
+                        "preparation gripper execution failed at %s with profile %s",
+                        step.key,
+                        profile,
+                    )
+                    return False
+            except Exception:  # noqa: BLE001 - preparation must fail closed
+                logger.exception("preparation gripper raised at %s", step.key)
+                return False
+            logger.info(
+                "preparation step completed: %s (profile=%s)",
+                step.key,
+                profile,
+            )
+            continue
         try:
             task, _ = create_preparation_task(
                 node,
@@ -463,6 +506,7 @@ def run_preparation(
                 keypoints,
                 config,
                 selected_step_keys={step.key},
+                gripper_profiles=gripper_profiles,
             )
             if not task.plan() or not task.solutions:
                 logger.error("preparation planning failed at %s", step.key)

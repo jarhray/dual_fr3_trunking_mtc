@@ -209,7 +209,9 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 - 先启动 `trunking_readiness_gate.py`，等待左右轨迹控制器 Action、左右
   `controller_state`、完整且新鲜的 14 个机械臂关节状态和 MoveGroup；全部通过后才启动
   MTC 节点，不再依赖固定启动延时
-- 真机 `execute:=true` 时默认依次 Homing 两个夹爪；任一 Homing 失败都不会启动 MTC
+- readiness 是一次性启动闸门，不参与 MTC 规划或后续 stage 调度。真机还等待
+  `/move`、`/grasp`，并在 `execute:=true` 时依次 Homing 两个夹爪；Gazebo/fake
+  则等待各自唯一的 `GripperCommand` 接口。任一检查失败都不会启动 MTC
 - `execute:=true` 默认逐 executable stage 重新规划并执行，每段使用真实机器人状态作为下一段起点；设置 `execute_stage_by_stage:=false` 可复现旧的整条 solution 一次性执行方式
 - 通过 `use_gazebo:=true` 可切换到 `dual_fr3_moveit_config/launch/gazebo.launch.py`
   ，让 RViz 直接跟随 Gazebo 里的实际运动显示
@@ -220,12 +222,13 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 preparation（独立模块 dual_fr3_trunking_mtc/preparation.py）：
   MoveTo(PipelinePlanner / OMPL RRTConnect): leader 到第二个关键点上方 0.15 m
   MoveTo(PipelinePlanner / OMPL RRTConnect): follower 到第一个关键点上方 0.15 m
-  键盘确认后 MoveTo(left_fr3_hand): 闭合 leader 夹爪
-  键盘确认后 MoveTo(right_fr3_hand): 闭合 follower 夹爪
+  键盘确认后 GripperProfile(cable_tip): leader 明确执行配置中的 Move/Grasp
+  键盘确认后 GripperProfile(cable_tip): follower 明确执行配置中的 Move/Grasp
   键盘确认后 Merger[MoveRelative(CartesianPath) x 2]: 双臂同步向下 0.15 m
 
 seat_edge:
   InfoOnly(seat_cable_on_edge): 先执行物理卡线动作（当前为占位，不发运动命令）
+  可选 GripperOperation: 从目标关键点 metadata.gripper 读取 actor/profile/override
   MoveTo(PoseStamped, CartesianPath): leader 保持 TCP xyz 不变，原地转向路径切向
   MoveRelative(CartesianPath): leader 沿卡线目标点的路径切向前移 10 cm
   MoveTo(PoseStamped, CartesianPath): follower 保持 TCP xyz 不变，按配置的路径方向转向
@@ -281,6 +284,10 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `preparation_enabled`：是否在正式任务前执行准备动作模块，默认 `true`
 - `preparation_height`：leader/follower 初始悬停高度及随后同步下降距离，默认 `0.15` m
 - `preparation_interactive`：夹爪闭合和双臂下降前是否等待键盘确认，默认 `true`
+- `gripper_profiles_file`：夹爪 profile 和不可突破的安全上限配置，默认
+  `config/gripper_profiles.yaml`
+- `preparation_leader_gripper_profile`：leader 准备抓取 profile，默认 `cable_tip`
+- `preparation_follower_gripper_profile`：follower 准备抓取 profile，默认 `cable_tip`
 - `leader_group`：leader 使用的 MoveIt planning group，默认 `left_fr3_arm`
 - `follower_group`：follower 使用的 MoveIt planning group，默认 `right_fr3_arm`
 - `leader_ik_frame`：leader TCP / IK frame，默认 `left_fr3_hand_tcp`
@@ -321,6 +328,29 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 以及双臂同步下降；每次按 Enter 继续，输入 `q` 中止。终端没有可用标准输入时，
 交互模式会安全中止，不会自动执行确认动作。设置
 `preparation_interactive:=false` 可关闭这三个确认。
+
+夹爪执行由 `dual_fr3_trunking_mtc/gripper.py` 统一封装。profile 中的 `width`
+始终表示两指总开口：真机 backend 对 `move`/`grasp` 分别调用 Franka 官方 Action；
+Gazebo 使用 `/gripper_cmd`；fake hardware 使用 `/gripper_action`。后端在启动时由
+`use_gazebo` 和 `use_fake_hardware` 唯一确定，不会因某个 Action Server 暂时离线而
+静默切换语义。profile 中的示例参数只用于初始联调，真机执行前必须按实际线径、
+线槽尺寸和安全夹持力完成标定。
+
+某个 `seat_edge` 需要夹爪操作时，可在目标关键点启用：
+
+```yaml
+metadata:
+  gripper:
+    enabled: true
+    actor: follower
+    profile: trunk_edge
+    # action: grasp  # 可选，覆盖 profile action
+    # width: 0.018   # 可选，仍受全局 safety 限制
+```
+
+`execute:=false` 时该操作以手指关节 `MoveTo` 表示，供碰撞检查和 RViz 预览；
+`execute:=true execute_stage_by_stage:=true` 时由夹爪 backend 显式执行。包含这类
+`seat_edge` 操作时不允许旧的整条 solution 一次性执行模式。
 
 在 `execute:=false` 的预览模式中，准备动作和正式任务会构建为一条 MTC 任务供
 RViz 检查；实际执行时准备模块逐步从机器人最新状态重新规划并执行，完成后再从

@@ -1,0 +1,58 @@
+schema_version: 1
+
+# These limits are enforced after all profile and per-stage overrides.  Tune the
+# profile values on the real workpieces before production use; do not raise the
+# safety limits merely to make an uncalibrated profile pass validation.
+safety:
+  min_width: 0.0       # total opening [m]
+  max_width: 0.08      # total opening [m]
+  max_speed: 0.10      # [m/s]
+  max_force: 40.0      # [N]
+  default_timeout: 10.0
+
+profiles:
+  # Initial values for commissioning.  Width, force, and epsilon must be
+  # calibrated against the actual cable and trunking geometry.
+  cable_tip:
+    action: grasp
+    width: 0.005
+    speed: 0.02
+    force: 10.0
+    epsilon:
+      inner: 0.003
+      outer: 0.008
+
+  cable_body:
+    action: grasp
+    width: 0.010
+    speed: 0.02
+    force: 12.0
+    epsilon:
+      inner: 0.004
+      outer: 0.008
+
+  trunk_edge:
+    action: grasp
+    width: 0.020
+    speed: 0.015
+    force: 8.0
+    epsilon:
+      inner: 0.003
+      outer: 0.005
+
+  close_empty:
+    action: move
+    width: 0.0
+    speed: 0.03
+
+  open:
+    action: move
+    width: 0.08
+    speed: 0.04
+
+  hold:
+    action: hold
+    width: 0.0
+    speed: 0.0
+
+  

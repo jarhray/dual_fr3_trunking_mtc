@@ -216,6 +216,38 @@ def test_formal_stage_specs_exclude_preparation_actions():
     assert [spec.primitive for spec in specs] == ["seat_cable_on_edge"]
 
 
+def test_seat_edge_can_insert_a_profile_based_gripper_operation():
+    keypoints = [
+        _keypoint("kp0", 0.0, 0.0, False),
+        Keypoint(
+            "kp1",
+            TASK_FRAME,
+            (0.0, 0.1, 0.0),
+            True,
+            metadata={
+                "gripper": {
+                    "actor": "follower",
+                    "profile": "trunk_edge",
+                    "action": "grasp",
+                    "width": 0.018,
+                }
+            },
+        ),
+    ]
+
+    specs = build_mtc_stage_specs(keypoints, build_task_schedule(keypoints))
+
+    assert [spec.mtc_stage_type for spec in specs] == [
+        "InfoOnly",
+        "GripperOperation",
+    ]
+    gripper = specs[1]
+    assert gripper.group == "right_fr3_hand"
+    assert gripper.gripper_profile == "trunk_edge"
+    assert gripper.gripper_action == "grasp"
+    assert gripper.gripper_width_override == pytest.approx(0.018)
+
+
 def test_default_orientation_directions_face_leader_and_follower_oppositely():
     keypoints = [
         _keypoint("kp0", 0.0, 0.0, False),
@@ -471,3 +503,49 @@ def test_stage_execution_halts_after_planning_exception(monkeypatch):
 
     assert succeeded is False
     assert created_stage_indices == [0]
+
+
+def test_stage_execution_dispatches_gripper_without_arm_planning(monkeypatch):
+    arm_tasks_created = []
+    requests = []
+
+    def fake_create_mtc_task(*_args, **_kwargs):
+        arm_tasks_created.append(True)
+        raise AssertionError("arm planning must not run for a gripper stage")
+
+    class FakeGripperController:
+        @staticmethod
+        def execute(request):
+            requests.append(request)
+            return True
+
+    monkeypatch.setattr(
+        "dual_fr3_trunking_mtc.mtc_prototype.create_mtc_task",
+        fake_create_mtc_task,
+    )
+    spec = SimpleNamespace(
+        executable=True,
+        stage_index=0,
+        name="seat_edge_grasp",
+        mtc_stage_type="GripperOperation",
+        actor="follower",
+        gripper_profile="cable_body",
+        gripper_action="",
+        gripper_width_override=None,
+    )
+
+    succeeded = _execute_stage_by_stage(
+        object(),
+        [spec],
+        [],
+        [],
+        _stage_execution_args(),
+        logging.getLogger("test_gripper_stage"),
+        gripper_controller=FakeGripperController(),
+    )
+
+    assert succeeded is True
+    assert not arm_tasks_created
+    assert len(requests) == 1
+    assert requests[0].actor == "follower"
+    assert requests[0].profile == "cable_body"

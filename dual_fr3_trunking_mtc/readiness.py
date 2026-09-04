@@ -7,11 +7,13 @@ from typing import Dict, Iterable
 import rclpy
 from control_msgs.action import FollowJointTrajectory, GripperCommand
 from control_msgs.msg import JointTrajectoryControllerState
-from franka_msgs.action import Homing
+from franka_msgs.action import Grasp, Homing, Move
 from moveit_msgs.action import MoveGroup
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+
+from .gripper import gripper_command_action_name, resolve_gripper_backend
 
 
 ARM_SIDES = ("left", "right")
@@ -29,14 +31,6 @@ def missing_arm_joint_names(joint_names: Iterable[str]) -> set[str]:
     return expected_arm_joint_names().difference(joint_names)
 
 
-def gripper_command_action_name(
-    side: str, namespaced_arm_controllers: bool
-) -> str:
-    """Return the backend-specific GripperCommand action name."""
-    action_name = "gripper_action" if namespaced_arm_controllers else "gripper_cmd"
-    return f"/{side}_franka_gripper/{action_name}"
-
-
 class TrunkingReadinessGate(Node):
     """Block MTC startup until the complete execution chain is ready."""
 
@@ -45,6 +39,7 @@ class TrunkingReadinessGate(Node):
 
         self.declare_parameter("execute", False)
         self.declare_parameter("use_fake_hardware", True)
+        self.declare_parameter("use_gazebo", False)
         self.declare_parameter("namespaced_arm_controllers", True)
         self.declare_parameter("start_gripper", True)
         self.declare_parameter("home_grippers_before_execute", True)
@@ -55,6 +50,11 @@ class TrunkingReadinessGate(Node):
         self.execute = bool(self.get_parameter("execute").value)
         self.use_fake_hardware = bool(
             self.get_parameter("use_fake_hardware").value
+        )
+        self.use_gazebo = bool(self.get_parameter("use_gazebo").value)
+        self.gripper_backend = resolve_gripper_backend(
+            use_fake_hardware=self.use_fake_hardware,
+            use_gazebo=self.use_gazebo,
         )
         self.namespaced_arm_controllers = bool(
             self.get_parameter("namespaced_arm_controllers").value
@@ -117,21 +117,35 @@ class TrunkingReadinessGate(Node):
             )
 
         self._gripper_command_clients: Dict[str, ActionClient] = {}
+        self._gripper_move_clients: Dict[str, ActionClient] = {}
+        self._gripper_grasp_clients: Dict[str, ActionClient] = {}
         self._gripper_homing_clients: Dict[str, ActionClient] = {}
         if self.start_gripper:
             for side in ARM_SIDES:
-                command_name = gripper_command_action_name(
-                    side, self.namespaced_arm_controllers
-                )
-                command_client = ActionClient(
-                    self,
-                    GripperCommand,
-                    command_name,
-                )
-                self._gripper_command_clients[side] = command_client
-                self._required_actions.append((command_name, command_client))
+                if self.gripper_backend == "franka":
+                    move_name = f"/{side}_franka_gripper/move"
+                    grasp_name = f"/{side}_franka_gripper/grasp"
+                    move_client = ActionClient(self, Move, move_name)
+                    grasp_client = ActionClient(self, Grasp, grasp_name)
+                    self._gripper_move_clients[side] = move_client
+                    self._gripper_grasp_clients[side] = grasp_client
+                    self._required_actions.extend(
+                        [(move_name, move_client), (grasp_name, grasp_client)]
+                    )
+                else:
+                    command_name = gripper_command_action_name(
+                        side,
+                        self.gripper_backend,
+                    )
+                    command_client = ActionClient(
+                        self,
+                        GripperCommand,
+                        command_name,
+                    )
+                    self._gripper_command_clients[side] = command_client
+                    self._required_actions.append((command_name, command_client))
 
-                if self.execute and not self.use_fake_hardware:
+                if self.execute and self.gripper_backend == "franka":
                     homing_name = f"/{side}_franka_gripper/homing"
                     homing_client = ActionClient(self, Homing, homing_name)
                     self._gripper_homing_clients[side] = homing_client
@@ -258,7 +272,7 @@ class TrunkingReadinessGate(Node):
                 "contains gripper stages"
             )
             return False
-        if self.use_fake_hardware:
+        if self.gripper_backend != "franka":
             return True
         if self.home_grippers_before_execute:
             for side in ARM_SIDES:
@@ -291,7 +305,8 @@ class TrunkingReadinessGate(Node):
 
         deadline = time.monotonic() + self.readiness_timeout
         self.get_logger().info(
-            "Waiting for both arm controllers and a complete 14-joint state"
+            "Waiting for both arm controllers, a complete 14-joint state, "
+            f"and gripper backend={self.gripper_backend}"
         )
         if not self._wait_for_system_ready(deadline):
             self.get_logger().error(

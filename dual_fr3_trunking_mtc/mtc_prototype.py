@@ -17,6 +17,12 @@ from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
 from std_msgs.msg import String
 
+from .gripper import (
+    GripperController,
+    GripperProfileRegistry,
+    GripperRequest,
+    resolve_gripper_backend,
+)
 from .models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
@@ -77,6 +83,9 @@ class MtcStageSpec:
     yaw_delta: float = 0.0
     target_yaw: float = 0.0
     joint_goal: Dict[str, float] = field(default_factory=dict)
+    gripper_profile: str = ""
+    gripper_action: str = ""
+    gripper_width_override: float | None = None
     info: str = ""
 
 
@@ -326,6 +335,100 @@ def _seat_cable_spec(
     )
 
 
+def _hand_group_for_actor(
+    actor: str,
+    leader_group: str,
+    follower_group: str,
+) -> str:
+    arm_group = leader_group if actor == "leader" else follower_group
+    if arm_group.endswith("_arm"):
+        return f"{arm_group[:-4]}_hand"
+    return f"{arm_group}_hand"
+
+
+def _finger_joint_for_ik_frame(ik_frame: str) -> str:
+    if ik_frame.endswith("hand_tcp"):
+        return f"{ik_frame[:-8]}finger_joint1"
+    return f"{ik_frame}_finger_joint1"
+
+
+def _seat_edge_gripper_spec(
+    stage_index: int,
+    step: TaskStep,
+    keypoints: Sequence[Keypoint],
+    leader_group: str,
+    follower_group: str,
+    leader_ik_frame: str,
+    follower_ik_frame: str,
+    from_index: int,
+    to_index: int,
+) -> MtcStageSpec | None:
+    """Build an optional profile-based gripper operation from keypoint metadata."""
+    start = keypoints[from_index]
+    goal = keypoints[to_index]
+    raw = goal.metadata.get("gripper")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        settings = {"profile": raw}
+    elif isinstance(raw, dict):
+        settings = raw
+    else:
+        raise ValueError(
+            f"keypoint {goal.name!r} metadata.gripper must be a string or mapping"
+        )
+    if not bool(settings.get("enabled", True)):
+        return None
+
+    actor = str(settings.get("actor", "follower"))
+    if actor not in {"leader", "follower"}:
+        raise ValueError(
+            f"keypoint {goal.name!r} gripper actor must be leader or follower"
+        )
+    profile = str(settings.get("profile", "")).strip()
+    if not profile:
+        raise ValueError(
+            f"keypoint {goal.name!r} gripper operation requires a profile"
+        )
+    action_override = str(settings.get("action", "")).strip()
+    width_override = settings.get("width")
+    if width_override is not None:
+        width_override = float(width_override)
+    ik_frame = leader_ik_frame if actor == "leader" else follower_ik_frame
+    return MtcStageSpec(
+        step_index=step.index,
+        stage_index=stage_index,
+        stage_key=_stage_key(
+            step,
+            actor,
+            start,
+            goal,
+            "gripper_operation",
+        ),
+        action=step.action,
+        actor=actor,
+        group=_hand_group_for_actor(actor, leader_group, follower_group),
+        ik_frame=ik_frame,
+        name=f"step_{step.index}_seat_edge_{actor}_gripper_{profile}",
+        from_index=from_index,
+        to_index=to_index,
+        from_keypoint=start.name,
+        to_keypoint=goal.name,
+        frame_id=start.frame_id,
+        vector=(0.0, 0.0, 0.0),
+        execution_order=list(step.execution_order),
+        primitive="gripper_operation",
+        mtc_stage_type="GripperOperation",
+        planner="GripperProfile",
+        gripper_profile=profile,
+        gripper_action=action_override,
+        gripper_width_override=width_override,
+        info=(
+            f"execute reusable gripper profile {profile!r} during seat_edge"
+        ),
+    )
+
+
 def _leader_seat_edge_lead_spec(
     stage_index: int,
     step: TaskStep,
@@ -455,6 +558,19 @@ def build_mtc_stage_specs(
                     to_index,
                 )
             )
+            gripper_spec = _seat_edge_gripper_spec(
+                len(specs),
+                step,
+                keypoints,
+                leader_group,
+                follower_group,
+                leader_ik_frame,
+                follower_ik_frame,
+                from_index,
+                to_index,
+            )
+            if gripper_spec is not None:
+                specs.append(gripper_spec)
             terminal_seat_edge = (
                 to_index == len(keypoints) - 1
                 and step.leader_hold_index == len(keypoints) - 1
@@ -664,6 +780,9 @@ def mtc_stage_spec_to_dict(spec: MtcStageSpec) -> Dict[str, Any]:
         "yaw_delta": spec.yaw_delta,
         "target_yaw": spec.target_yaw,
         "joint_goal": dict(spec.joint_goal),
+        "gripper_profile": spec.gripper_profile,
+        "gripper_action": spec.gripper_action,
+        "gripper_width_override": spec.gripper_width_override,
         "execution_order": list(spec.execution_order),
         "mtc_stage_type": spec.mtc_stage_type,
         "planner": spec.planner,
@@ -709,6 +828,9 @@ def mtc_stage_sequence_to_text(specs: Sequence[MtcStageSpec]) -> str:
             f"frame={spec.frame_id}, vector={spec.vector}, "
             f"yaw_delta={spec.yaw_delta:.3f}, "
             f"target_yaw={spec.target_yaw:.3f}, "
+            f"gripper_profile={spec.gripper_profile or '-'}, "
+            f"gripper_action={spec.gripper_action or '-'}, "
+            f"gripper_width_override={spec.gripper_width_override}, "
             f"executable={spec.executable}, "
             f"order={execution_order}, info={spec.info}"
         )
@@ -828,6 +950,7 @@ def create_mtc_task(
     anchor_max_path_z: float = DEFAULT_ANCHOR_MAX_PATH_Z,
     include_preparation: bool = True,
     preparation_config: PreparationConfig | None = None,
+    gripper_profiles: GripperProfileRegistry | None = None,
 ):
     _rclcpp, core, stages = _import_mtc_modules()
 
@@ -868,6 +991,7 @@ def create_mtc_task(
             node,
             keypoints,
             preparation_config,
+            gripper_profiles=gripper_profiles,
         )
 
     specs = build_mtc_stage_specs(
@@ -890,6 +1014,35 @@ def create_mtc_task(
         ):
             continue
         if not spec.executable:
+            continue
+
+        if spec.mtc_stage_type == "GripperOperation":
+            if gripper_profiles is None:
+                raise ValueError(
+                    f"gripper profiles are required by stage {spec.name!r}"
+                )
+            profile = gripper_profiles.resolve(
+                GripperRequest(
+                    actor=spec.actor,
+                    profile=spec.gripper_profile,
+                    action_override=spec.gripper_action or None,
+                    width_override=spec.gripper_width_override,
+                )
+            )
+            # Keep a hand-joint representation in the MTC solution for
+            # collision checking and RViz.  Staged execution intercepts this
+            # spec and sends the explicit backend action instead.
+            if profile.action != "hold":
+                move_to = stages.MoveTo(spec.name, jointspace)
+                move_to.group = spec.group
+                move_to.setGoal(
+                    {
+                        _finger_joint_for_ik_frame(spec.ik_frame): (
+                            profile.finger_joint_position
+                        )
+                    }
+                )
+                task.add(move_to)
             continue
 
         if spec.mtc_stage_type == "MoveTo":
@@ -958,6 +1111,14 @@ def _default_keypoints_file() -> str:
     )
 
 
+def _default_gripper_profiles_file() -> str:
+    return str(
+        Path(get_package_share_directory("dual_fr3_trunking_mtc"))
+        / "config"
+        / "gripper_profiles.yaml"
+    )
+
+
 def _parse_bool(value: str | bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -1006,6 +1167,20 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--preparation-enabled", type=_parse_bool, default=True)
     parser.add_argument("--preparation-height", type=float, default=0.15)
     parser.add_argument("--preparation-interactive", type=_parse_bool, default=True)
+    parser.add_argument(
+        "--gripper-profiles-file",
+        default=_default_gripper_profiles_file(),
+    )
+    parser.add_argument(
+        "--preparation-leader-gripper-profile",
+        default="cable_tip",
+    )
+    parser.add_argument(
+        "--preparation-follower-gripper-profile",
+        default="close_empty",
+    )
+    parser.add_argument("--use-fake-hardware", type=_parse_bool, default=True)
+    parser.add_argument("--use-gazebo", type=_parse_bool, default=False)
     parser.add_argument("--plan", type=_parse_bool, default=True)
     parser.add_argument("--execute", type=_parse_bool, default=False)
     parser.add_argument(
@@ -1103,6 +1278,8 @@ def _execute_stage_by_stage(
     task_steps: Sequence[TaskStep],
     args: argparse.Namespace,
     logger: logging.Logger,
+    gripper_controller: GripperController | None = None,
+    gripper_profiles: GripperProfileRegistry | None = None,
 ) -> bool:
     executable_specs = [spec for spec in specs if spec.executable]
     logger.info(
@@ -1110,6 +1287,44 @@ def _execute_stage_by_stage(
         len(executable_specs),
     )
     for ordinal, spec in enumerate(executable_specs, start=1):
+        if getattr(spec, "mtc_stage_type", "") == "GripperOperation":
+            logger.info(
+                "executing gripper stage %d/%d: [%02d] %s",
+                ordinal,
+                len(executable_specs),
+                spec.stage_index,
+                spec.name,
+            )
+            if gripper_controller is None:
+                logger.error(
+                    "gripper controller is unavailable for stage [%02d]",
+                    spec.stage_index,
+                )
+                return False
+            try:
+                succeeded = gripper_controller.execute(
+                    GripperRequest(
+                        actor=spec.actor,
+                        profile=spec.gripper_profile,
+                        action_override=spec.gripper_action or None,
+                        width_override=spec.gripper_width_override,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - execution must fail closed
+                logger.exception(
+                    "gripper stage [%02d] raised; halting all later stages",
+                    spec.stage_index,
+                )
+                return False
+            if not succeeded:
+                logger.error(
+                    "gripper stage [%02d] failed; halting all later stages",
+                    spec.stage_index,
+                )
+                return False
+            logger.info("gripper stage [%02d] completed", spec.stage_index)
+            continue
+
         logger.info(
             "planning stage %d/%d: [%02d] %s",
             ordinal,
@@ -1139,6 +1354,7 @@ def _execute_stage_by_stage(
                 follower_orientation_direction=args.follower_orientation_direction,
                 anchor_max_path_z=args.anchor_max_path_z,
                 include_preparation=False,
+                gripper_profiles=gripper_profiles,
             )
             plan_succeeded = stage_task.plan()
         except Exception:  # noqa: BLE001 - execution must fail closed
@@ -1187,7 +1403,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     node = rclcpp.Node("dual_fr3_trunking_mtc_prototype", node_options)
     stage_publisher = None
+    gripper_controller = None
     try:
+        gripper_profiles = GripperProfileRegistry.load(
+            args.gripper_profiles_file
+        )
+        gripper_backend = resolve_gripper_backend(
+            use_fake_hardware=args.use_fake_hardware,
+            use_gazebo=args.use_gazebo,
+        )
+        logger.info(
+            "gripper backend=%s, profiles=%s",
+            gripper_backend,
+            ", ".join(gripper_profiles.names()),
+        )
         keypoints = load_keypoints(args.keypoints_file, fallback_frame=args.task_frame)
         segments = build_segment_plans(
             keypoints,
@@ -1215,7 +1444,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             velocity_scaling=args.motion_velocity_scaling,
             acceleration_scaling=args.motion_acceleration_scaling,
             interactive=args.preparation_interactive,
+            leader_gripper_profile=args.preparation_leader_gripper_profile,
+            follower_gripper_profile=args.preparation_follower_gripper_profile,
         )
+        # Validate preparation profile names even in planning-only mode.
+        gripper_profiles.get(preparation_config.leader_gripper_profile)
+        gripper_profiles.get(preparation_config.follower_gripper_profile)
         preparation_steps = (
             build_preparation_steps(keypoints, preparation_config)
             if args.preparation_enabled
@@ -1242,7 +1476,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             anchor_max_path_z=args.anchor_max_path_z,
             include_preparation=args.preparation_enabled,
             preparation_config=preparation_config,
+            gripper_profiles=gripper_profiles,
         )
+
+        formal_gripper_specs = [
+            spec for spec in specs
+            if spec.mtc_stage_type == "GripperOperation"
+        ]
+        if args.execute and formal_gripper_specs and not args.execute_stage_by_stage:
+            logger.error(
+                "profile-based seat_edge gripper operations require "
+                "execute_stage_by_stage=true"
+            )
+            return 2
+        if args.execute and (
+            args.preparation_enabled or formal_gripper_specs
+        ):
+            gripper_controller = GripperController(
+                gripper_profiles,
+                gripper_backend,
+            )
 
         logger.info(
             "loaded %d keypoints, %d segments, %d task steps, "
@@ -1275,6 +1528,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     keypoints,
                     preparation_config,
                     logger,
+                    gripper_controller=gripper_controller,
+                    gripper_profiles=gripper_profiles,
                 ):
                     return 3
                 logger.info("preparation completed; starting the formal task")
@@ -1303,6 +1558,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     anchor_max_path_z=args.anchor_max_path_z,
                     include_preparation=False,
                     preparation_config=preparation_config,
+                    gripper_profiles=gripper_profiles,
                 )
             full_plan_succeeded = task.plan()
             if full_plan_succeeded:
@@ -1329,6 +1585,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     task_steps,
                     args,
                     logger,
+                    gripper_controller=gripper_controller,
+                    gripper_profiles=gripper_profiles,
                 ):
                     return 3
                 logger.info("staged MTC execution finished")
@@ -1356,4 +1614,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     finally:
         _shutdown_stage_sequence_publisher(stage_publisher)
+        if gripper_controller is not None:
+            gripper_controller.close()
         rclcpp.shutdown()

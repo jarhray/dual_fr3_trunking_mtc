@@ -28,6 +28,7 @@ if(BUILD_TESTING)
 
   ament_add_pytest_test(test_mtc_prototype test/test_mtc_prototype.py)
   ament_add_pytest_test(test_preparation test/test_preparation.py)
+  ament_add_pytest_test(test_gripper test/test_gripper.py)
   ament_add_pytest_test(test_planner test/test_planner.py)
   ament_add_pytest_test(test_readiness test/test_readiness.py)
   ament_add_pytest_test(test_scheduler test/test_scheduler.py)

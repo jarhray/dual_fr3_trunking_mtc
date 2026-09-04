@@ -35,6 +35,16 @@ keypoints:
     position: [0.364, -0.07, 0.10]
     in_slot: false
     role: seat_edge
+    metadata:
+      # Set enabled=true after calibrating the selected profile.  The action is
+      # inserted only in the mtc_prototype stage sequence for this seat_edge.
+      gripper:
+        enabled: false
+        actor: follower
+        profile: trunk_edge
+        # Optional per-keypoint overrides:
+        # action: grasp
+        # width: 0.020
 
   # - name: slot_follow_3
   #   frame_id: left_fr3_link0

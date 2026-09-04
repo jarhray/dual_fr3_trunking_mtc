@@ -37,9 +37,9 @@ def test_segment_executor_accepts_real_and_gazebo_controller_topics():
 
 
 def test_readiness_selects_backend_specific_gripper_action():
-    assert gripper_command_action_name("left", True) == (
+    assert gripper_command_action_name("left", "fake") == (
         "/left_franka_gripper/gripper_action"
     )
-    assert gripper_command_action_name("right", False) == (
+    assert gripper_command_action_name("right", "gazebo") == (
         "/right_franka_gripper/gripper_cmd"
     )

@@ -118,6 +118,22 @@ def generate_launch_description():
         default_value="true",
         description="Require keyboard confirmation for gripping and descent",
     )
+    gripper_profiles_file = DeclareLaunchArgument(
+        "gripper_profiles_file",
+        default_value=os.path.join(
+            get_package_share_directory(trunking_package),
+            "config",
+            "gripper_profiles.yaml",
+        ),
+    )
+    preparation_leader_gripper_profile = DeclareLaunchArgument(
+        "preparation_leader_gripper_profile",
+        default_value="cable_tip",
+    )
+    preparation_follower_gripper_profile = DeclareLaunchArgument(
+        "preparation_follower_gripper_profile",
+        default_value="cable_tip",
+    )
     trajectory_execution_duration_scaling = DeclareLaunchArgument(
         "trajectory_execution_duration_scaling",
         default_value="10.0",
@@ -305,6 +321,16 @@ def generate_launch_description():
             LaunchConfiguration("preparation_height"),
             "--preparation-interactive",
             LaunchConfiguration("preparation_interactive"),
+            "--gripper-profiles-file",
+            LaunchConfiguration("gripper_profiles_file"),
+            "--preparation-leader-gripper-profile",
+            LaunchConfiguration("preparation_leader_gripper_profile"),
+            "--preparation-follower-gripper-profile",
+            LaunchConfiguration("preparation_follower_gripper_profile"),
+            "--use-fake-hardware",
+            LaunchConfiguration("use_fake_hardware"),
+            "--use-gazebo",
+            LaunchConfiguration("use_gazebo"),
             "--plan",
             LaunchConfiguration("plan"),
             "--execute",
@@ -328,6 +354,9 @@ def generate_launch_description():
                 ),
                 "use_fake_hardware": ParameterValue(
                     LaunchConfiguration("use_fake_hardware"), value_type=bool
+                ),
+                "use_gazebo": ParameterValue(
+                    LaunchConfiguration("use_gazebo"), value_type=bool
                 ),
                 "namespaced_arm_controllers": ParameterValue(
                     NotSubstitution(LaunchConfiguration("use_gazebo")),
@@ -408,6 +437,9 @@ def generate_launch_description():
             preparation_enabled,
             preparation_height,
             preparation_interactive,
+            gripper_profiles_file,
+            preparation_leader_gripper_profile,
+            preparation_follower_gripper_profile,
             trajectory_execution_duration_scaling,
             trajectory_execution_goal_margin,
             plan,
