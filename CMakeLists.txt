@@ -27,6 +27,7 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
 
   ament_add_pytest_test(test_mtc_prototype test/test_mtc_prototype.py)
+  ament_add_pytest_test(test_config test/test_config.py)
   ament_add_pytest_test(test_preparation test/test_preparation.py)
   ament_add_pytest_test(test_gripper test/test_gripper.py)
   ament_add_pytest_test(test_planner test/test_planner.py)

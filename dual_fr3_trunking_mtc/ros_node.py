@@ -13,13 +13,10 @@ from std_srvs.srv import Trigger
 from visualization_msgs.msg import MarkerArray
 
 from .markers import build_marker_array
-from .models import (
-    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
-    DEFAULT_LEADER_ORIENTATION_DIRECTION,
-    TaskStep,
-)
+from .models import TaskPlan, TaskStep
 from .planner import build_segment_plans, load_keypoints, plan_to_dict
-from .scheduler import build_task_schedule
+from .runtime.config import DEFAULTS
+from .scheduler import build_task_plan
 
 
 class TrunkingPlannerNode(Node):
@@ -33,24 +30,33 @@ class TrunkingPlannerNode(Node):
         )
 
         self.declare_parameter("keypoints_file", default_keypoints)
-        self.declare_parameter("task_frame", "left_fr3_link0")
-        self.declare_parameter("samples_per_segment", 8)
-        self.declare_parameter("publish_markers", True)
-        self.declare_parameter("auto_reload", True)
-        self.declare_parameter("reload_period_sec", 1.0)
-        self.declare_parameter("keypoint_marker_scale", 0.05)
-        self.declare_parameter("segment_line_width", 0.015)
-        self.declare_parameter("marker_z_offset", 0.05)
-        self.declare_parameter("publish_labels", True)
-        self.declare_parameter("initial_leader_index", 1)
-        self.declare_parameter("initial_follower_index", 0)
+        self.declare_parameter("task_frame", DEFAULTS.task_frame)
+        self.declare_parameter("samples_per_segment", DEFAULTS.samples_per_segment)
+        self.declare_parameter("publish_markers", DEFAULTS.publish_markers)
+        self.declare_parameter("auto_reload", DEFAULTS.auto_reload)
+        self.declare_parameter("reload_period_sec", DEFAULTS.reload_period_sec)
+        self.declare_parameter(
+            "keypoint_marker_scale",
+            DEFAULTS.keypoint_marker_scale,
+        )
+        self.declare_parameter("segment_line_width", DEFAULTS.segment_line_width)
+        self.declare_parameter("marker_z_offset", DEFAULTS.marker_z_offset)
+        self.declare_parameter("publish_labels", DEFAULTS.publish_labels)
+        self.declare_parameter(
+            "initial_leader_index",
+            DEFAULTS.initial_leader_index,
+        )
+        self.declare_parameter(
+            "initial_follower_index",
+            DEFAULTS.initial_follower_index,
+        )
         self.declare_parameter(
             "leader_orientation_direction",
-            DEFAULT_LEADER_ORIENTATION_DIRECTION,
+            DEFAULTS.leader_orientation_direction,
         )
         self.declare_parameter(
             "follower_orientation_direction",
-            DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+            DEFAULTS.follower_orientation_direction,
         )
 
         latched_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -62,8 +68,7 @@ class TrunkingPlannerNode(Node):
         self._last_keypoints_file: Optional[str] = None
         self._last_mtime: Optional[float] = None
         self._keypoints = []
-        self._segments = []
-        self._task_steps = []
+        self._task_plan = TaskPlan((), (), (), 1, 0)
 
         self._load_and_publish(force=True)
 
@@ -99,7 +104,7 @@ class TrunkingPlannerNode(Node):
         follower_orientation_direction = str(
             self.get_parameter("follower_orientation_direction").value
         )
-        self._segments = build_segment_plans(
+        segments = build_segment_plans(
             self._keypoints,
             samples_per_segment=samples_per_segment,
             leader_orientation_direction=leader_orientation_direction,
@@ -107,8 +112,8 @@ class TrunkingPlannerNode(Node):
         )
         initial_leader_index = int(self.get_parameter("initial_leader_index").value)
         initial_follower_index = int(self.get_parameter("initial_follower_index").value)
-        self._task_steps = build_task_schedule(
-            self._keypoints,
+        self._task_plan = build_task_plan(
+            segments,
             initial_leader_index=initial_leader_index,
             initial_follower_index=initial_follower_index,
         )
@@ -118,7 +123,7 @@ class TrunkingPlannerNode(Node):
         else:
             self.get_logger().info(
                 f"Loaded {len(self._keypoints)} keypoints and "
-                f"{len(self._segments)} segments from {keypoints_path}"
+                f"{len(self._task_plan.segments)} segments from {keypoints_path}"
             )
             self._log_segment_plan()
             self._log_task_schedule()
@@ -129,7 +134,7 @@ class TrunkingPlannerNode(Node):
         return True
 
     def _log_segment_plan(self) -> None:
-        for segment in self._segments:
+        for segment in self._task_plan.segments:
             execution_order = " -> ".join(segment.execution_order)
             self.get_logger().info(
                 f"Segment {segment.index}: {segment.start.name} -> "
@@ -140,7 +145,7 @@ class TrunkingPlannerNode(Node):
             )
 
     def _log_task_schedule(self) -> None:
-        for step in self._task_steps:
+        for step in self._task_plan.steps:
             execution_order = " -> ".join(step.execution_order)
             leader_text = self._arm_step_text(
                 step.leader_mode,
@@ -169,16 +174,16 @@ class TrunkingPlannerNode(Node):
         hold_index: int | None,
     ) -> str:
         if hold_index is not None:
-            return f"{mode}({self._keypoints[hold_index].name})"
+            return f"{mode}({self._task_plan.keypoints[hold_index].name})"
         if from_index is not None and to_index is not None:
             return (
-                f"{mode}({self._keypoints[from_index].name}->"
-                f"{self._keypoints[to_index].name})"
+                f"{mode}({self._task_plan.keypoints[from_index].name}->"
+                f"{self._task_plan.keypoints[to_index].name})"
             )
         return mode
 
     def _publish_current(self) -> None:
-        summary = plan_to_dict(self._keypoints, self._segments, self._task_steps)
+        summary = plan_to_dict(self._task_plan)
         msg = String()
         msg.data = json.dumps(summary, ensure_ascii=False, indent=2)
         self.summary_pub.publish(msg)
@@ -189,7 +194,7 @@ class TrunkingPlannerNode(Node):
         msg = String()
         msg.data = "\n".join(
             self._task_step_text(step)
-            for step in self._task_steps
+            for step in self._task_plan.steps
         )
         self.schedule_pub.publish(msg)
 
@@ -217,8 +222,8 @@ class TrunkingPlannerNode(Node):
     def _publish_markers(self) -> None:
         if bool(self.get_parameter("publish_markers").value):
             markers = build_marker_array(
-                self._keypoints,
-                self._segments,
+                self._task_plan.keypoints,
+                self._task_plan.segments,
                 keypoint_scale=float(
                     self.get_parameter("keypoint_marker_scale").value
                 ),

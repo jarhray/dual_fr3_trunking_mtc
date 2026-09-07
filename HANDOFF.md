@@ -1,7 +1,9 @@
 # dual_fr3_trunking_mtc 交接文档
 
-> 最后更新：2026-08-31。`dual_fr3_moveit_config` 中真机控制器命名空间改造造成的
-> Gazebo 回归已经修复；后续优先复核真机夹爪限位并继续逐 stage 验证。
+> 最后更新：2026-09-04。任务规划数据流已收敛为
+> `Keypoint[] -> SegmentPlan[] -> TaskPlan -> 统一 MtcStageSpec[]`，preparation 和
+> formal 已共用 Stage IR/builder/executor；后续优先复核真机夹爪
+> 限位并继续逐 stage 验证。
 
 ## 1. 项目定位
 
@@ -10,7 +12,7 @@
 - `leader` 固定为左臂：`left_fr3_arm`。
 - `follower` 固定为右臂：`right_fr3_arm`。
 - 默认任务坐标系：`left_fr3_link0`。
-- 工作空间为 `/home/jhr/ws_franka`，MoveIt/MTC 系统依赖由用户自行安装。
+- 工作空间为 `/home/jerry/franka_ros2_ws`，MoveIt/MTC 系统依赖由用户自行安装。
 - `dual_fr3_trunking_mtc` 和 `dual_fr3_moveit_config` 当前都有未提交修改；不要假设
   依赖包已经回滚，也不要使用 `git reset --hard` 或覆盖用户修改。
 
@@ -24,7 +26,7 @@ Gazebo 已恢复为单 controller manager，并使用独立的 MoveIt controller
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/jhr/ws_franka/install/setup.bash
+source /home/jerry/franka_ros2_ws/install/setup.bash
 ros2 run dual_fr3_trunking_mtc trunking_step_by_step.py
 ```
 
@@ -64,9 +66,11 @@ MTC 启动入口已经增加 fail-closed 就绪门：
 
 ```text
 config/keypoints.yaml
-  -> planner.py       关键点解析、段分类、路径方向
-  -> scheduler.py     leader/follower 调度
-  -> mtc_prototype.py MTC stage 和 task
+  -> planner.py          Keypoint[] -> SegmentPlan[]，段分类和路径方向
+  -> scheduler.py        SegmentPlan[] -> TaskPlan，leader/follower 调度
+  -> stages/compiler.py  TaskPlan -> preparation + formal MtcStageSpec[]
+  -> mtc/task_builder.py 构造 MTC task
+  -> mtc_prototype.py 顶层流程编排
   -> move_group/controllers
 ```
 
@@ -74,8 +78,12 @@ config/keypoints.yaml
 
 - `config/keypoints.yaml`：点位置、frame、`in_slot`、角色语义。
 - `dual_fr3_trunking_mtc/planner.py`：解析、分类、路径方向、summary。
-- `dual_fr3_trunking_mtc/scheduler.py`：动作调度。
-- `dual_fr3_trunking_mtc/mtc_prototype.py`：`MtcStageSpec` 和 MTC task。
+- `dual_fr3_trunking_mtc/scheduler.py`：消费 Segment、校验连续性并生成 `TaskPlan`。
+- `dual_fr3_trunking_mtc/stages/`：统一 `MtcStageSpec` 和 preparation/formal Stage
+  程序编译。
+- `dual_fr3_trunking_mtc/mtc/`：共享 MTC task 构造和逐 Stage 执行。
+- `dual_fr3_trunking_mtc/preparation.py`：准备 StageSpec 编译和交互确认。
+- `dual_fr3_trunking_mtc/mtc_prototype.py`：兼容入口和顶层流程编排。
 - `dual_fr3_trunking_mtc/readiness.py`：双臂控制器、Action、14 关节状态和
   夹爪 Homing 的 fail-closed 就绪门。
 - `dual_fr3_trunking_mtc/segment_executor.py`：逐 stage 诊断执行器。
@@ -94,6 +102,7 @@ config/keypoints.yaml
 - `dual_fr3_moveit_config/config/dual_fr3.urdf.xacro`
 - `dual_fr3_moveit_config/launch/demo.launch.py`
 - `dual_fr3_moveit_config/launch/gazebo.launch.py`
+- `dual_fr3_moveit_config/dual_fr3_moveit_config/moveit_resources.py`
 
 ## 4. 关键点约定
 
@@ -127,26 +136,29 @@ entry_5  [0.364, -0.070, 0.150]  out of slot
 默认准备位置索引：`initial_leader_index=1`、`initial_follower_index=0`。
 按当前 YAML 中启用的关键点，这对应 leader=`corner_2`、follower=`corner_1`。
 
-正式任务开始前的准备动作位于独立模块
-`dual_fr3_trunking_mtc/preparation.py`，顺序固定为：
+正式任务开始前的准备动作由
+`dual_fr3_trunking_mtc/preparation.py` 编译为同一种 `MtcStageSpec`，顺序固定为：
 
-1. leader：使用 OMPL 从当前状态移动到 `corner_2` 上方 `0.15 m`。
-2. follower：使用 OMPL 从当前状态移动到 `corner_1` 上方 `0.15 m`。
+1. leader：使用 OMPL 从当前状态移动到 `corner_2` 上方 `0.05 m`。
+2. follower：使用 OMPL 从当前状态移动到 `corner_1` 上方 `0.05 m`。
 3. 等待键盘确认，闭合 leader 夹爪。
 4. 等待键盘确认，闭合 follower 夹爪。
 5. 等待键盘确认，通过 MTC `Merger` 让双臂 TCP 沿 Cartesian 直线同步向下
-   `0.15 m`。
+   `0.05 m`。
 
-`execute:=true` 时这五步逐步从最新机器人状态规划和执行，准备完成后再规划正式
-任务。`execute:=false` 时准备动作和正式任务仍会组合成一条 MTC 任务用于 RViz
-预览。
+`execute:=true` 时通用 executor 按 `phase` 先逐步从最新机器人状态执行这五步，
+准备完成后再规划 formal phase。`execute:=false` 时两个 phase 会组合成
+一条 MTC 任务用于 RViz 预览。JSON/text stage sequence 版本为 2，其中
+包含 `phase`、`confirmation_required` 和递归 `children`。
 
 后续调度规则是：当 follower 的下一段属于 `straighten` 且 leader 已在前方时，先让 leader 跳到下一个 anchor，再由 follower 追赶拉直；`seat_edge` 则先执行 leader 让位和 follower 卡线。当前是运动学近似，不包含下压、接触检测、力控、视觉或线缆张力反馈。
 
 ## 6. 当前 MTC stage 映射
 
-准备动作文件：`dual_fr3_trunking_mtc/preparation.py`；正式任务 stage 文件：
-`dual_fr3_trunking_mtc/mtc_prototype.py`。
+preparation 和 formal 都编译为 `MtcStageSpec`：准备 recipe 位于
+`dual_fr3_trunking_mtc/preparation.py`，统一编译入口位于
+`dual_fr3_trunking_mtc/stages/compiler.py`，全部 MTC 对象构造位于
+`dual_fr3_trunking_mtc/mtc/task_builder.py`。
 
 ```text
 leader/follower initial approach:  MoveTo + PipelinePlanner (OMPL RRTConnect)
@@ -349,7 +361,7 @@ MTC 日志中的 `stage_key` 由 task step、action、actor、起止点和 primi
 `launch/mtc_prototype.launch.py` 的主要默认值：
 
 ```text
-use_gazebo=false, plan=true, execute=false
+use_gazebo=false, gazebo_effort=false, plan=true, execute=false
 execute_stage_by_stage=true, start_gripper=true
 initial_leader_index=1, initial_follower_index=0
 leader_group=left_fr3_arm, follower_group=right_fr3_arm
@@ -358,7 +370,7 @@ leader_orientation_direction=reverse, follower_orientation_direction=forward
 motion_velocity_scaling=0.2, motion_acceleration_scaling=0.2
 leader_lead_distance=0.10
 tool_roll=pi, tool_pitch=0.0
-preparation_enabled=true, preparation_height=0.15
+preparation_enabled=true, preparation_height=0.05
 preparation_interactive=true
 trajectory_execution_duration_scaling=10.0
 trajectory_execution_goal_margin=5.0
@@ -458,7 +470,7 @@ watchdog。
 ## 14. 构建和测试
 
 ```bash
-cd /home/jhr/ws_franka
+cd /home/jerry/franka_ros2_ws
 source /opt/ros/humble/setup.bash
 colcon build --packages-select dual_fr3_moveit_config dual_fr3_trunking_mtc \
   --symlink-install
@@ -466,24 +478,26 @@ source install/setup.bash
 ```
 
 ```bash
-cd /home/jhr/ws_franka
+cd /home/jerry/franka_ros2_ws
 source /opt/ros/humble/setup.bash
-PYTHONPATH=/home/jhr/ws_franka/src/dual_fr3_trunking_mtc:$PYTHONPATH \
+PYTHONPATH=/home/jerry/franka_ros2_ws/src/dual_fr3_trunking_mtc:$PYTHONPATH \
   python3 -m pytest -q src/dual_fr3_trunking_mtc/test
 ```
 
-当前已验证：22 个 Python 测试通过，`ament_flake8`、`ament_pep257`、
-`ament_lint_cmake` 通过，`dual_fr3_trunking_mtc` 单包构建成功，launch 参数解析成功。
+当前已验证：65 个 Python 测试通过，`ament_flake8`、`ament_pep257`、
+`ament_lint_cmake` 通过，`dual_fr3_moveit_config` 与 `dual_fr3_trunking_mtc`
+双包构建成功，三个 launch 入口的参数解析成功。
 完整 `colcon test` 还会遇到仓库原有 copyright 缺失，以及受限环境不能下载 ROS XML
-schema 的 `xmllint` 失败。这些不等于 Gazebo 运行验证通过；当前 Gazebo 回归尚未修复。
+schema 的 `xmllint` 失败。上述结果是静态解析和构建验证，不等于已完成
+真机或 Gazebo 全链路运行回归；本轮没有启动机器人执行。
 
 ## 15. 修改边界
 
 两个仓库都有用户需要保留的未提交修改。开始工作前分别执行：
 
 ```bash
-git -C /home/jhr/ws_franka/src/dual_fr3_moveit_config status --short
-git -C /home/jhr/ws_franka/src/dual_fr3_trunking_mtc status --short
+git -C /home/jerry/franka_ros2_ws/src/dual_fr3_moveit_config status --short
+git -C /home/jerry/franka_ros2_ws/src/dual_fr3_trunking_mtc status --short
 ```
 
 本轮在 `dual_fr3_trunking_mtc` 中新增或修改的关键内容：
@@ -492,8 +506,12 @@ git -C /home/jhr/ws_franka/src/dual_fr3_trunking_mtc status --short
 - `mtc_prototype.launch.py` 用就绪进程退出事件替换固定 Timer。
 - `demo.launch.py`/`mtc_prototype.launch.py` 继续传递 `start_gripper`。
 - `segment_executor.py` 同时检查左右 controller state，并兼容两套话题名称。
-- `mtc_prototype.py` 任一 stage 失败或异常后立即终止后续 stage。
-- 新增 readiness 和失败即停测试，CMake 注册 pytest。
+- `mtc/executor.py` 任一 stage 失败或异常后立即终止后续 stage。
+- preparation/formal 收敛为带 `phase` 的统一 StageSpec 程序，共用
+  task builder 与 executor。
+- `mtc_prototype.launch.py`、MoveIt demo/Gazebo launch 共用
+  `dual_fr3_moveit_config.moveit_resources` 构造机器人和 OMPL 参数。
+- 新增 readiness、失败即停、统一 preparation Stage 测试，CMake 注册 pytest。
 
 `dual_fr3_moveit_config` 当前未提交的高风险修改包括：
 
@@ -505,7 +523,6 @@ git -C /home/jhr/ws_franka/src/dual_fr3_trunking_mtc status --short
   `load_left_ros2_control`/`load_right_ros2_control`。
 - `research_franka_hand.xacro` finger upper limit 从 `0.04` 改为 `0.041`，尚未真机复测。
 
-下一个 agent 被授权为修复 Gazebo 而修改 `dual_fr3_moveit_config`，但必须保持改动最小，
-先做真机/Gazebo controller 配置分流，不要回滚整个包，也不要覆盖与控制器无关的用户
-改动。修复后同时记录 Gazebo Action 名称、MoveIt 加载名称和真机名称，避免再次互相
-覆盖。
+继续修改 `dual_fr3_moveit_config` 时必须保持改动最小，不要回滚整个包，也不要
+覆盖与本任务无关的用户改动。新增机器人模型或 planner 参数时，先修改
+`moveit_resources.py`，再同时验证 demo、Gazebo 和 MTC 三个 launch 入口。

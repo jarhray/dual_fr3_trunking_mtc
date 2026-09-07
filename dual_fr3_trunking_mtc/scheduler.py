@@ -2,19 +2,50 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
-from .models import Keypoint, TaskStep
-from .planner import classify_segment
+from .models import Keypoint, SegmentPlan, TaskPlan, TaskStep
+
+
+SUPPORTED_SEGMENT_ACTIONS = {"straighten", "seat_edge"}
+
+
+def _keypoints_from_segments(
+    segments: Sequence[SegmentPlan],
+) -> tuple[Keypoint, ...]:
+    """Validate an ordered SegmentPlan chain and recover its keypoints."""
+    if not segments:
+        return ()
+
+    keypoints = [segments[0].start]
+    for expected_index, segment in enumerate(segments):
+        if segment.index != expected_index:
+            raise ValueError(
+                "segments must be ordered with contiguous zero-based indices; "
+                f"expected {expected_index}, got {segment.index}"
+            )
+        if segment.start != keypoints[-1]:
+            raise ValueError(
+                "segments must form a continuous chain; "
+                f"segment {segment.index} starts at {segment.start.name!r}, "
+                f"expected {keypoints[-1].name!r}"
+            )
+        if segment.action not in SUPPORTED_SEGMENT_ACTIONS:
+            raise ValueError(
+                f"unsupported segment action {segment.action!r} at "
+                f"segment {segment.index}"
+            )
+        keypoints.append(segment.goal)
+    return tuple(keypoints)
 
 
 def _validate_indices(
-    keypoints: Sequence[Keypoint],
+    keypoint_count: int,
     initial_leader_index: int,
     initial_follower_index: int,
 ) -> None:
-    if not keypoints:
+    if keypoint_count == 0:
         return
 
-    last_index = len(keypoints) - 1
+    last_index = keypoint_count - 1
     if not 0 <= initial_leader_index <= last_index:
         raise ValueError(
             f"initial_leader_index must be between 0 and {last_index}, "
@@ -33,13 +64,15 @@ def _validate_indices(
 
 def _follower_step(
     step_index: int,
+    segments: Sequence[SegmentPlan],
     keypoints: Sequence[Keypoint],
     follower_index: int,
     leader_anchor_index: int,
 ) -> TaskStep:
-    start = keypoints[follower_index]
-    goal = keypoints[follower_index + 1]
-    action, _path_type = classify_segment(start, goal)
+    segment = segments[follower_index]
+    start = segment.start
+    goal = segment.goal
+    action = segment.action
 
     if action == "seat_edge":
         terminal_seat_edge = (
@@ -96,14 +129,14 @@ def _follower_step(
 
 
 def _next_anchor_index(
-    keypoints: Sequence[Keypoint],
+    segments: Sequence[SegmentPlan],
     current_leader_index: int,
 ) -> Optional[int]:
-    for index in range(current_leader_index + 1, len(keypoints)):
-        if keypoints[index].in_slot != keypoints[index - 1].in_slot:
-            return index
+    for segment in segments[current_leader_index:]:
+        if segment.action == "seat_edge":
+            return segment.index + 1
 
-    last_index = len(keypoints) - 1
+    last_index = len(segments)
     if current_leader_index < last_index:
         return last_index
     return None
@@ -137,14 +170,27 @@ def _leader_anchor_step(
     )
 
 
-def build_task_schedule(
-    keypoints: Sequence[Keypoint],
+def build_task_plan(
+    segments: Sequence[SegmentPlan],
     initial_leader_index: int = 1,
     initial_follower_index: int = 0,
-) -> List[TaskStep]:
-    if len(keypoints) < 2:
-        return []
-    _validate_indices(keypoints, initial_leader_index, initial_follower_index)
+) -> TaskPlan:
+    """Schedule an already classified segment chain into a complete task plan."""
+    segment_chain = tuple(segments)
+    keypoints = _keypoints_from_segments(segment_chain)
+    if not segment_chain:
+        return TaskPlan(
+            keypoints=(),
+            segments=(),
+            steps=(),
+            initial_leader_index=initial_leader_index,
+            initial_follower_index=initial_follower_index,
+        )
+    _validate_indices(
+        len(keypoints),
+        initial_leader_index,
+        initial_follower_index,
+    )
 
     leader_index = initial_leader_index
     follower_index = initial_follower_index
@@ -152,17 +198,15 @@ def build_task_schedule(
 
     while True:
         while follower_index < leader_index:
-            follower_action, _path_type = classify_segment(
-                keypoints[follower_index],
-                keypoints[follower_index + 1],
-            )
+            follower_action = segment_chain[follower_index].action
             if follower_action != "seat_edge":
-                next_anchor = _next_anchor_index(keypoints, leader_index)
+                next_anchor = _next_anchor_index(segment_chain, leader_index)
                 if next_anchor is not None:
                     break
             steps.append(
                 _follower_step(
                     len(steps),
+                    segment_chain,
                     keypoints,
                     follower_index,
                     leader_index,
@@ -170,7 +214,7 @@ def build_task_schedule(
             )
             follower_index += 1
 
-        next_anchor = _next_anchor_index(keypoints, leader_index)
+        next_anchor = _next_anchor_index(segment_chain, leader_index)
         if next_anchor is None:
             break
 
@@ -185,4 +229,25 @@ def build_task_schedule(
         )
         leader_index = next_anchor
 
-    return steps
+    return TaskPlan(
+        keypoints=keypoints,
+        segments=segment_chain,
+        steps=tuple(steps),
+        initial_leader_index=initial_leader_index,
+        initial_follower_index=initial_follower_index,
+    )
+
+
+def build_task_schedule(
+    segments: Sequence[SegmentPlan],
+    initial_leader_index: int = 1,
+    initial_follower_index: int = 0,
+) -> List[TaskStep]:
+    """Compatibility view of :func:`build_task_plan` returning only its steps."""
+    return list(
+        build_task_plan(
+            segments,
+            initial_leader_index=initial_leader_index,
+            initial_follower_index=initial_follower_index,
+        ).steps
+    )
