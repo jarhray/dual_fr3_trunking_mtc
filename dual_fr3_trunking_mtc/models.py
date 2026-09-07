@@ -99,3 +99,14 @@ class TaskStep:
     follower_to_index: Optional[int] = None
     follower_hold_index: Optional[int] = None
     notes: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TaskPlan:
+    """Single planning boundary passed from scheduling to compilation."""
+
+    keypoints: Tuple[Keypoint, ...]
+    segments: Tuple[SegmentPlan, ...]
+    steps: Tuple[TaskStep, ...]
+    initial_leader_index: int
+    initial_follower_index: int

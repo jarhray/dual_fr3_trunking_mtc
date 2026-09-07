@@ -1,6 +1,10 @@
+from dataclasses import replace
+
+import pytest
+
 from dual_fr3_trunking_mtc.models import Keypoint
 from dual_fr3_trunking_mtc.planner import build_segment_plans, plan_to_dict
-from dual_fr3_trunking_mtc.scheduler import build_task_schedule
+from dual_fr3_trunking_mtc.scheduler import build_task_plan
 
 TASK_FRAME = "left_fr3_link0"
 
@@ -19,11 +23,16 @@ def test_build_task_schedule_for_current_trunking_flow():
         _keypoint("kp5", False),
     ]
 
-    steps = build_task_schedule(
-        keypoints,
+    segments = build_segment_plans(keypoints)
+    task_plan = build_task_plan(
+        segments,
         initial_leader_index=1,
         initial_follower_index=0,
     )
+    steps = task_plan.steps
+
+    assert task_plan.keypoints == tuple(keypoints)
+    assert task_plan.segments == tuple(segments)
 
     assert [step.action for step in steps] == [
         "seat_edge",
@@ -67,11 +76,12 @@ def test_build_task_schedule_preserves_anchor_jump_then_follower_catchup():
         _keypoint("kp2", True),
     ]
 
-    steps = build_task_schedule(
-        keypoints,
+    task_plan = build_task_plan(
+        build_segment_plans(keypoints),
         initial_leader_index=0,
         initial_follower_index=0,
     )
+    steps = task_plan.steps
 
     assert [step.action for step in steps] == [
         "move_anchor",
@@ -97,11 +107,11 @@ def test_leader_anchors_before_follower_straightens_when_both_are_in_slot():
         _keypoint("entry_5", False),
     ]
 
-    steps = build_task_schedule(
-        keypoints,
+    steps = build_task_plan(
+        build_segment_plans(keypoints),
         initial_leader_index=1,
         initial_follower_index=0,
-    )
+    ).steps
 
     assert steps[0].action == "move_anchor"
     assert steps[0].leader_from_index == 1
@@ -117,13 +127,13 @@ def test_plan_summary_includes_task_schedule():
         _keypoint("kp1", True),
     ]
     segments = build_segment_plans(keypoints)
-    steps = build_task_schedule(
-        keypoints,
+    task_plan = build_task_plan(
+        segments,
         initial_leader_index=1,
         initial_follower_index=0,
     )
 
-    summary = plan_to_dict(keypoints, segments, steps)
+    summary = plan_to_dict(task_plan)
 
     assert summary["task_schedule"][0]["action"] == "seat_edge"
     assert summary["task_schedule"][0]["leader"]["hold"] == "kp1"
@@ -133,3 +143,32 @@ def test_plan_summary_includes_task_schedule():
     assert summary["task_schedule"][0]["execution_order"] == [
         "follower_seat_cable_on_edge",
     ]
+
+
+def test_scheduler_consumes_segment_action_without_reclassifying_keypoints():
+    keypoints = [
+        _keypoint("kp0", False),
+        _keypoint("kp1", False),
+    ]
+    segment = replace(build_segment_plans(keypoints)[0], action="seat_edge")
+
+    task_plan = build_task_plan(
+        [segment],
+        initial_leader_index=1,
+        initial_follower_index=0,
+    )
+
+    assert task_plan.steps[0].action == "seat_edge"
+
+
+def test_scheduler_rejects_a_discontinuous_segment_chain():
+    first_pair = build_segment_plans(
+        [_keypoint("kp0", False), _keypoint("kp1", False)]
+    )
+    second_pair = build_segment_plans(
+        [_keypoint("other", False), _keypoint("kp2", False)]
+    )
+    segments = [first_pair[0], replace(second_pair[0], index=1)]
+
+    with pytest.raises(ValueError, match="continuous chain"):
+        build_task_plan(segments)

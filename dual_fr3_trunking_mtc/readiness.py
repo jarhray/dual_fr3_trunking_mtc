@@ -14,6 +14,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
 from .gripper import gripper_command_action_name, resolve_gripper_backend
+from .runtime.config import DEFAULTS
 
 
 ARM_SIDES = ("left", "right")
@@ -37,15 +38,18 @@ class TrunkingReadinessGate(Node):
     def __init__(self) -> None:
         super().__init__("dual_fr3_trunking_readiness_gate")
 
-        self.declare_parameter("execute", False)
-        self.declare_parameter("use_fake_hardware", True)
-        self.declare_parameter("use_gazebo", False)
+        self.declare_parameter("execute", DEFAULTS.execute)
+        self.declare_parameter("use_fake_hardware", DEFAULTS.use_fake_hardware)
+        self.declare_parameter("use_gazebo", DEFAULTS.use_gazebo)
         self.declare_parameter("namespaced_arm_controllers", True)
-        self.declare_parameter("start_gripper", True)
-        self.declare_parameter("home_grippers_before_execute", True)
-        self.declare_parameter("grippers_homed", False)
-        self.declare_parameter("readiness_timeout", 60.0)
-        self.declare_parameter("state_max_age", 0.5)
+        self.declare_parameter("start_gripper", DEFAULTS.start_gripper)
+        self.declare_parameter(
+            "home_grippers_before_execute",
+            DEFAULTS.home_grippers_before_execute,
+        )
+        self.declare_parameter("grippers_homed", DEFAULTS.grippers_homed)
+        self.declare_parameter("readiness_timeout", DEFAULTS.readiness_timeout)
+        self.declare_parameter("state_max_age", DEFAULTS.state_max_age)
 
         self.execute = bool(self.get_parameter("execute").value)
         self.use_fake_hardware = bool(

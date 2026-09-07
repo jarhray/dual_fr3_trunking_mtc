@@ -24,9 +24,10 @@ from .models import (
     Keypoint,
     ORIENTATION_DIRECTIONS,
 )
-from .mtc_prototype import MtcStageSpec, build_mtc_stage_specs
-from .planner import load_keypoints
-from .scheduler import build_task_schedule
+from .planner import build_segment_plans, load_keypoints
+from .scheduler import build_task_plan
+from .stages.compiler import build_mtc_stage_specs
+from .stages.specs import MtcStageSpec
 
 
 ARM_FOR_ACTOR = {"leader": "left", "follower": "right"}
@@ -100,16 +101,18 @@ def build_segment_stages(
     leader_orientation_direction: str = DEFAULT_LEADER_ORIENTATION_DIRECTION,
     follower_orientation_direction: str = DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
 ) -> list[MtcStageSpec]:
-    task_steps = build_task_schedule(
+    segments = build_segment_plans(
         keypoints,
+        leader_orientation_direction=leader_orientation_direction,
+        follower_orientation_direction=follower_orientation_direction,
+    )
+    task_plan = build_task_plan(
+        segments,
         initial_leader_index=initial_leader_index,
         initial_follower_index=initial_follower_index,
     )
     return build_mtc_stage_specs(
-        keypoints,
-        task_steps,
-        initial_leader_index=initial_leader_index,
-        initial_follower_index=initial_follower_index,
+        task_plan,
         leader_lead_distance=leader_lead_distance,
         leader_orientation_direction=leader_orientation_direction,
         follower_orientation_direction=follower_orientation_direction,

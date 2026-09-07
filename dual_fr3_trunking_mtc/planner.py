@@ -15,6 +15,7 @@ from .models import (
     Keypoint,
     ORIENTATION_DIRECTION_FORWARD,
     SegmentPlan,
+    TaskPlan,
     TaskStep,
     path_orientation_yaw,
     rpy_to_quaternion,
@@ -246,11 +247,9 @@ def _task_step_to_dict(
     }
 
 
-def plan_to_dict(
-    keypoints: Sequence[Keypoint],
-    segments: Sequence[SegmentPlan],
-    task_steps: Sequence[TaskStep] | None = None,
-) -> Dict[str, Any]:
+def plan_to_dict(task_plan: TaskPlan) -> Dict[str, Any]:
+    keypoints = task_plan.keypoints
+    segments = task_plan.segments
     summary = {
         "keypoints": [
             {
@@ -279,22 +278,17 @@ def plan_to_dict(
         ],
     }
 
-    if task_steps is not None:
-        summary["task_schedule"] = [
-            _task_step_to_dict(step, keypoints)
-            for step in task_steps
-        ]
+    summary["task_schedule"] = [
+        _task_step_to_dict(step, keypoints)
+        for step in task_plan.steps
+    ]
 
     return summary
 
 
-def plan_to_json(
-    keypoints: Sequence[Keypoint],
-    segments: Sequence[SegmentPlan],
-    task_steps: Sequence[TaskStep] | None = None,
-) -> str:
+def plan_to_json(task_plan: TaskPlan) -> str:
     return json.dumps(
-        plan_to_dict(keypoints, segments, task_steps),
+        plan_to_dict(task_plan),
         ensure_ascii=False,
         indent=2,
     )

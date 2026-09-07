@@ -14,6 +14,7 @@ from dual_fr3_trunking_mtc.planner import (
     load_keypoints,
     plan_to_dict,
 )
+from dual_fr3_trunking_mtc.scheduler import build_task_plan
 
 TASK_FRAME = "left_fr3_link0"
 
@@ -150,7 +151,7 @@ def test_plan_summary_includes_execution_order():
     ]
 
     segments = build_segment_plans(keypoints, samples_per_segment=5)
-    summary = plan_to_dict(keypoints, segments)
+    summary = plan_to_dict(build_task_plan(segments))
 
     assert "rpy" not in summary["keypoints"][0]
     assert summary["segments"][0]["action"] == "seat_edge"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
@@ -17,215 +16,170 @@ from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
-    Command,
-    FindExecutable,
     LaunchConfiguration,
     NotSubstitution,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from dual_fr3_moveit_config.moveit_resources import build_moveit_resources
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, launch_default
 
-def load_yaml(package_name, file_path):
-    package_path = get_package_share_directory(package_name)
-    absolute_file_path = os.path.join(package_path, file_path)
-    try:
-        with open(absolute_file_path, "r", encoding="utf-8") as file:
-            return yaml.safe_load(file)
-    except OSError:
-        return None
+
+def declare_argument(name, default, **kwargs):
+    return DeclareLaunchArgument(
+        name,
+        default_value=launch_default(default),
+        **kwargs,
+    )
 
 
 def generate_launch_description():
     moveit_package = "dual_fr3_moveit_config"
     trunking_package = "dual_fr3_trunking_mtc"
 
-    use_fake_hardware = DeclareLaunchArgument("use_fake_hardware", default_value="true")
-    fake_sensor_commands = DeclareLaunchArgument("fake_sensor_commands", default_value="true")
-    left_robot_ip = DeclareLaunchArgument("left_robot_ip", default_value="172.16.0.2")
-    right_robot_ip = DeclareLaunchArgument("right_robot_ip", default_value="172.16.0.3")
-    load_gripper = DeclareLaunchArgument("load_gripper", default_value="true")
-    start_gripper = DeclareLaunchArgument("start_gripper", default_value="true")
-    ee_id = DeclareLaunchArgument("ee_id", default_value="franka_hand")
-    use_rviz = DeclareLaunchArgument("use_rviz", default_value="true")
-    use_gazebo = DeclareLaunchArgument("use_gazebo", default_value="false")
-    gz_args = DeclareLaunchArgument("gz_args", default_value="empty.sdf -r")
-    keypoints_file = DeclareLaunchArgument(
+    use_fake_hardware = declare_argument(
+        "use_fake_hardware", DEFAULTS.use_fake_hardware
+    )
+    fake_sensor_commands = declare_argument(
+        "fake_sensor_commands", DEFAULTS.fake_sensor_commands
+    )
+    left_robot_ip = declare_argument("left_robot_ip", DEFAULTS.left_robot_ip)
+    right_robot_ip = declare_argument("right_robot_ip", DEFAULTS.right_robot_ip)
+    load_gripper = declare_argument("load_gripper", DEFAULTS.load_gripper)
+    start_gripper = declare_argument("start_gripper", DEFAULTS.start_gripper)
+    ee_id = declare_argument("ee_id", DEFAULTS.ee_id)
+    use_rviz = declare_argument("use_rviz", DEFAULTS.use_rviz)
+    use_gazebo = declare_argument("use_gazebo", DEFAULTS.use_gazebo)
+    gz_args = declare_argument("gz_args", DEFAULTS.gz_args)
+    gazebo_effort = declare_argument(
+        "gazebo_effort", DEFAULTS.gazebo_effort
+    )
+    keypoints_file = declare_argument(
         "keypoints_file",
-        default_value=os.path.join(
+        os.path.join(
             get_package_share_directory(trunking_package),
             "config",
             "keypoints.yaml",
         ),
     )
-    task_frame = DeclareLaunchArgument("task_frame", default_value="left_fr3_link0")
-    initial_leader_index = DeclareLaunchArgument("initial_leader_index", default_value="1")
-    initial_follower_index = DeclareLaunchArgument("initial_follower_index", default_value="0")
-    leader_group = DeclareLaunchArgument("leader_group", default_value="left_fr3_arm")
-    follower_group = DeclareLaunchArgument("follower_group", default_value="right_fr3_arm")
-    leader_ik_frame = DeclareLaunchArgument("leader_ik_frame", default_value="left_fr3_hand_tcp")
-    follower_ik_frame = DeclareLaunchArgument(
-        "follower_ik_frame",
-        default_value="right_fr3_hand_tcp",
+    task_frame = declare_argument("task_frame", DEFAULTS.task_frame)
+    initial_leader_index = declare_argument(
+        "initial_leader_index", DEFAULTS.initial_leader_index
     )
-    leader_orientation_direction = DeclareLaunchArgument(
-        "leader_orientation_direction",
-        default_value="reverse",
+    initial_follower_index = declare_argument(
+        "initial_follower_index", DEFAULTS.initial_follower_index
     )
-    follower_orientation_direction = DeclareLaunchArgument(
-        "follower_orientation_direction",
-        default_value="forward",
+    leader_group = declare_argument("leader_group", DEFAULTS.leader_group)
+    follower_group = declare_argument("follower_group", DEFAULTS.follower_group)
+    leader_ik_frame = declare_argument(
+        "leader_ik_frame", DEFAULTS.leader_ik_frame
     )
-    motion_velocity_scaling = DeclareLaunchArgument(
-        "motion_velocity_scaling",
-        default_value="0.2",
+    follower_ik_frame = declare_argument(
+        "follower_ik_frame", DEFAULTS.follower_ik_frame
     )
-    motion_acceleration_scaling = DeclareLaunchArgument(
-        "motion_acceleration_scaling",
-        default_value="0.2",
+    leader_orientation_direction = declare_argument(
+        "leader_orientation_direction", DEFAULTS.leader_orientation_direction
     )
-    anchor_max_path_z = DeclareLaunchArgument(
+    follower_orientation_direction = declare_argument(
+        "follower_orientation_direction", DEFAULTS.follower_orientation_direction
+    )
+    motion_velocity_scaling = declare_argument(
+        "motion_velocity_scaling", DEFAULTS.motion_velocity_scaling
+    )
+    motion_acceleration_scaling = declare_argument(
+        "motion_acceleration_scaling", DEFAULTS.motion_acceleration_scaling
+    )
+    anchor_max_path_z = declare_argument(
         "anchor_max_path_z",
-        default_value="0.4",
+        DEFAULTS.anchor_max_path_z,
         description=(
             "Maximum TCP z in the keypoint frame during "
             "direct_move_to_next_anchor"
         ),
     )
-    leader_lead_distance = DeclareLaunchArgument(
-        "leader_lead_distance",
-        default_value="0.10",
+    leader_lead_distance = declare_argument(
+        "leader_lead_distance", DEFAULTS.leader_lead_distance
     )
-    tool_roll = DeclareLaunchArgument(
-        "tool_roll",
-        default_value="3.141592653589793",
+    tool_roll = declare_argument("tool_roll", DEFAULTS.tool_roll)
+    tool_pitch = declare_argument("tool_pitch", DEFAULTS.tool_pitch)
+    preparation_enabled = declare_argument(
+        "preparation_enabled", DEFAULTS.preparation_enabled
     )
-    tool_pitch = DeclareLaunchArgument(
-        "tool_pitch",
-        default_value="0.0",
-    )
-    preparation_enabled = DeclareLaunchArgument(
-        "preparation_enabled",
-        default_value="true",
-    )
-    preparation_height = DeclareLaunchArgument(
+    preparation_height = declare_argument(
         "preparation_height",
-        default_value="0.05",
+        DEFAULTS.preparation_height,
         description="Vertical approach and synchronized descent distance",
     )
-    preparation_interactive = DeclareLaunchArgument(
+    preparation_interactive = declare_argument(
         "preparation_interactive",
-        default_value="true",
+        DEFAULTS.preparation_interactive,
         description="Require keyboard confirmation for gripping and descent",
     )
-    gripper_profiles_file = DeclareLaunchArgument(
+    gripper_profiles_file = declare_argument(
         "gripper_profiles_file",
-        default_value=os.path.join(
+        os.path.join(
             get_package_share_directory(trunking_package),
             "config",
             "gripper_profiles.yaml",
         ),
     )
-    preparation_leader_gripper_profile = DeclareLaunchArgument(
+    preparation_leader_gripper_profile = declare_argument(
         "preparation_leader_gripper_profile",
-        default_value="cable_tip",
+        DEFAULTS.preparation_leader_gripper_profile,
     )
-    preparation_follower_gripper_profile = DeclareLaunchArgument(
+    preparation_follower_gripper_profile = declare_argument(
         "preparation_follower_gripper_profile",
-        default_value="cable_tip",
+        DEFAULTS.preparation_follower_gripper_profile,
     )
-    trajectory_execution_duration_scaling = DeclareLaunchArgument(
+    trajectory_execution_duration_scaling = declare_argument(
         "trajectory_execution_duration_scaling",
-        default_value="10.0",
+        DEFAULTS.trajectory_execution_duration_scaling,
     )
-    trajectory_execution_goal_margin = DeclareLaunchArgument(
+    trajectory_execution_goal_margin = declare_argument(
         "trajectory_execution_goal_margin",
-        default_value="5.0",
+        DEFAULTS.trajectory_execution_goal_margin,
     )
-    plan = DeclareLaunchArgument("plan", default_value="true")
-    execute = DeclareLaunchArgument("execute", default_value="false")
-    execute_stage_by_stage = DeclareLaunchArgument(
-        "execute_stage_by_stage",
-        default_value="true",
+    plan = declare_argument("plan", DEFAULTS.plan)
+    execute = declare_argument("execute", DEFAULTS.execute)
+    execute_stage_by_stage = declare_argument(
+        "execute_stage_by_stage", DEFAULTS.execute_stage_by_stage
     )
-    readiness_timeout = DeclareLaunchArgument(
-        "readiness_timeout",
-        default_value="60.0",
+    readiness_timeout = declare_argument(
+        "readiness_timeout", DEFAULTS.readiness_timeout
     )
-    state_max_age = DeclareLaunchArgument("state_max_age", default_value="0.5")
-    home_grippers_before_execute = DeclareLaunchArgument(
+    state_max_age = declare_argument("state_max_age", DEFAULTS.state_max_age)
+    home_grippers_before_execute = declare_argument(
         "home_grippers_before_execute",
-        default_value="true",
+        DEFAULTS.home_grippers_before_execute,
     )
-    grippers_homed = DeclareLaunchArgument(
-        "grippers_homed",
-        default_value="false",
-    )
-    mtc_keep_alive_sec = DeclareLaunchArgument(
-        "mtc_keep_alive_sec",
-        default_value="30.0",
+    grippers_homed = declare_argument("grippers_homed", DEFAULTS.grippers_homed)
+    mtc_keep_alive_sec = declare_argument(
+        "mtc_keep_alive_sec", DEFAULTS.keep_alive_sec
     )
 
     moveit_share = get_package_share_directory(moveit_package)
-    urdf_xacro = os.path.join(moveit_share, "config", "dual_fr3.urdf.xacro")
-    srdf_xacro = os.path.join(moveit_share, "config", "dual_fr3.srdf.xacro")
-
-    robot_description_config = Command(
-        [
-            FindExecutable(name="xacro"),
-            " ",
-            urdf_xacro,
-            " use_fake_hardware:=",
-            LaunchConfiguration("use_fake_hardware"),
-            " fake_sensor_commands:=",
-            LaunchConfiguration("fake_sensor_commands"),
-            " left_robot_ip:=",
-            LaunchConfiguration("left_robot_ip"),
-            " right_robot_ip:=",
-            LaunchConfiguration("right_robot_ip"),
-            " load_gripper:=",
-            LaunchConfiguration("load_gripper"),
-            " ee_id:=",
-            LaunchConfiguration("ee_id"),
-        ]
+    hardware_resources = build_moveit_resources(
+        "dual_fr3.urdf.xacro",
+        {
+            "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
+            "fake_sensor_commands": LaunchConfiguration("fake_sensor_commands"),
+            "left_robot_ip": LaunchConfiguration("left_robot_ip"),
+            "right_robot_ip": LaunchConfiguration("right_robot_ip"),
+            "load_left_ros2_control": "true",
+            "load_right_ros2_control": "true",
+            "load_gripper": LaunchConfiguration("load_gripper"),
+            "ee_id": LaunchConfiguration("ee_id"),
+        },
     )
-    robot_description = {
-        "robot_description": ParameterValue(robot_description_config, value_type=str)
-    }
-
-    robot_description_semantic_config = Command(
-        [
-            FindExecutable(name="xacro"),
-            " ",
-            srdf_xacro,
-        ]
+    gazebo_resources = build_moveit_resources(
+        "dual_fr3.gazebo.urdf.xacro",
+        {
+            "load_gripper": LaunchConfiguration("load_gripper"),
+            "ee_id": LaunchConfiguration("ee_id"),
+            "gazebo_effort": LaunchConfiguration("gazebo_effort"),
+        },
     )
-    robot_description_semantic = {
-        "robot_description_semantic": ParameterValue(
-            robot_description_semantic_config,
-            value_type=str,
-        )
-    }
-    kinematics_yaml = load_yaml(moveit_package, "config/kinematics.yaml")
-    ompl_planning_pipeline_config = {
-        "move_group": {
-            "planning_plugin": "ompl_interface/OMPLPlanner",
-            "request_adapters": (
-                "default_planner_request_adapters/AddTimeOptimalParameterization "
-                "default_planner_request_adapters/ResolveConstraintFrames "
-                "default_planner_request_adapters/FixWorkspaceBounds "
-                "default_planner_request_adapters/FixStartStateBounds "
-                "default_planner_request_adapters/FixStartStateCollision "
-                "default_planner_request_adapters/FixStartStatePathConstraints"
-            ),
-            "start_state_max_bounds_error": 0.1,
-            "path_tolerance": 0.001,
-            "resample_dt": 0.02,
-        }
-    }
-    ompl_planning_yaml = load_yaml(moveit_package, "config/ompl_planning.yaml")
-    if ompl_planning_yaml:
-        ompl_planning_pipeline_config["move_group"].update(ompl_planning_yaml)
 
     moveit_demo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -260,6 +214,7 @@ def generate_launch_description():
             "ee_id": LaunchConfiguration("ee_id"),
             "use_rviz": LaunchConfiguration("use_rviz"),
             "gz_args": LaunchConfiguration("gz_args"),
+            "gazebo_effort": LaunchConfiguration("gazebo_effort"),
             "trajectory_execution_duration_scaling": LaunchConfiguration(
                 "trajectory_execution_duration_scaling"
             ),
@@ -271,75 +226,83 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("use_gazebo")),
     )
 
-    mtc_node = Node(
-        package=trunking_package,
-        executable="trunking_mtc_prototype.py",
-        prefix="/usr/bin/python3",
-        output="screen",
-        parameters=[
-            robot_description,
-            robot_description_semantic,
-            kinematics_yaml,
-            ompl_planning_pipeline_config,
-        ],
-        arguments=[
-            "--keypoints-file",
-            LaunchConfiguration("keypoints_file"),
-            "--task-frame",
-            LaunchConfiguration("task_frame"),
-            "--initial-leader-index",
-            LaunchConfiguration("initial_leader_index"),
-            "--initial-follower-index",
-            LaunchConfiguration("initial_follower_index"),
-            "--leader-group",
-            LaunchConfiguration("leader_group"),
-            "--follower-group",
-            LaunchConfiguration("follower_group"),
-            "--leader-ik-frame",
-            LaunchConfiguration("leader_ik_frame"),
-            "--follower-ik-frame",
-            LaunchConfiguration("follower_ik_frame"),
-            "--leader-orientation-direction",
-            LaunchConfiguration("leader_orientation_direction"),
-            "--follower-orientation-direction",
-            LaunchConfiguration("follower_orientation_direction"),
-            "--motion-velocity-scaling",
-            LaunchConfiguration("motion_velocity_scaling"),
-            "--motion-acceleration-scaling",
-            LaunchConfiguration("motion_acceleration_scaling"),
-            "--anchor-max-path-z",
-            LaunchConfiguration("anchor_max_path_z"),
-            "--leader-lead-distance",
-            LaunchConfiguration("leader_lead_distance"),
-            "--tool-roll",
-            LaunchConfiguration("tool_roll"),
-            "--tool-pitch",
-            LaunchConfiguration("tool_pitch"),
-            "--preparation-enabled",
-            LaunchConfiguration("preparation_enabled"),
-            "--preparation-height",
-            LaunchConfiguration("preparation_height"),
-            "--preparation-interactive",
-            LaunchConfiguration("preparation_interactive"),
-            "--gripper-profiles-file",
-            LaunchConfiguration("gripper_profiles_file"),
-            "--preparation-leader-gripper-profile",
-            LaunchConfiguration("preparation_leader_gripper_profile"),
-            "--preparation-follower-gripper-profile",
-            LaunchConfiguration("preparation_follower_gripper_profile"),
-            "--use-fake-hardware",
-            LaunchConfiguration("use_fake_hardware"),
-            "--use-gazebo",
-            LaunchConfiguration("use_gazebo"),
-            "--plan",
-            LaunchConfiguration("plan"),
-            "--execute",
-            LaunchConfiguration("execute"),
-            "--execute-stage-by-stage",
-            LaunchConfiguration("execute_stage_by_stage"),
-            "--keep-alive-sec",
-            LaunchConfiguration("mtc_keep_alive_sec"),
-        ],
+    mtc_arguments = [
+        "--keypoints-file",
+        LaunchConfiguration("keypoints_file"),
+        "--task-frame",
+        LaunchConfiguration("task_frame"),
+        "--initial-leader-index",
+        LaunchConfiguration("initial_leader_index"),
+        "--initial-follower-index",
+        LaunchConfiguration("initial_follower_index"),
+        "--leader-group",
+        LaunchConfiguration("leader_group"),
+        "--follower-group",
+        LaunchConfiguration("follower_group"),
+        "--leader-ik-frame",
+        LaunchConfiguration("leader_ik_frame"),
+        "--follower-ik-frame",
+        LaunchConfiguration("follower_ik_frame"),
+        "--leader-orientation-direction",
+        LaunchConfiguration("leader_orientation_direction"),
+        "--follower-orientation-direction",
+        LaunchConfiguration("follower_orientation_direction"),
+        "--motion-velocity-scaling",
+        LaunchConfiguration("motion_velocity_scaling"),
+        "--motion-acceleration-scaling",
+        LaunchConfiguration("motion_acceleration_scaling"),
+        "--anchor-max-path-z",
+        LaunchConfiguration("anchor_max_path_z"),
+        "--leader-lead-distance",
+        LaunchConfiguration("leader_lead_distance"),
+        "--tool-roll",
+        LaunchConfiguration("tool_roll"),
+        "--tool-pitch",
+        LaunchConfiguration("tool_pitch"),
+        "--preparation-enabled",
+        LaunchConfiguration("preparation_enabled"),
+        "--preparation-height",
+        LaunchConfiguration("preparation_height"),
+        "--preparation-interactive",
+        LaunchConfiguration("preparation_interactive"),
+        "--gripper-profiles-file",
+        LaunchConfiguration("gripper_profiles_file"),
+        "--preparation-leader-gripper-profile",
+        LaunchConfiguration("preparation_leader_gripper_profile"),
+        "--preparation-follower-gripper-profile",
+        LaunchConfiguration("preparation_follower_gripper_profile"),
+        "--use-fake-hardware",
+        LaunchConfiguration("use_fake_hardware"),
+        "--use-gazebo",
+        LaunchConfiguration("use_gazebo"),
+        "--plan",
+        LaunchConfiguration("plan"),
+        "--execute",
+        LaunchConfiguration("execute"),
+        "--execute-stage-by-stage",
+        LaunchConfiguration("execute_stage_by_stage"),
+        "--keep-alive-sec",
+        LaunchConfiguration("mtc_keep_alive_sec"),
+    ]
+
+    def mtc_node(resources, condition):
+        return Node(
+            package=trunking_package,
+            executable="trunking_mtc_prototype.py",
+            prefix="/usr/bin/python3",
+            output="screen",
+            parameters=resources.as_parameters(),
+            arguments=mtc_arguments,
+            condition=condition,
+        )
+
+    hardware_mtc_node = mtc_node(
+        hardware_resources,
+        UnlessCondition(LaunchConfiguration("use_gazebo")),
+    )
+    gazebo_mtc_node = mtc_node(
+        gazebo_resources,
+        IfCondition(LaunchConfiguration("use_gazebo")),
     )
 
     readiness_node = Node(
@@ -384,7 +347,7 @@ def generate_launch_description():
 
     def start_mtc_after_readiness(event, _context):
         if event.returncode == 0:
-            return [mtc_node]
+            return [hardware_mtc_node, gazebo_mtc_node]
         return [
             LogInfo(
                 msg=(
@@ -418,6 +381,7 @@ def generate_launch_description():
             use_rviz,
             use_gazebo,
             gz_args,
+            gazebo_effort,
             keypoints_file,
             task_frame,
             initial_leader_index,

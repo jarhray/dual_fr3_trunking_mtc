@@ -1,12 +1,13 @@
 import logging
 import math
+from inspect import signature
 from types import SimpleNamespace
 
 import pytest
 from shape_msgs.msg import SolidPrimitive
 
-from dual_fr3_trunking_mtc.models import Keypoint
-from dual_fr3_trunking_mtc.mtc_prototype import (
+from dual_fr3_trunking_mtc.models import Keypoint, TaskPlan
+from dual_fr3_trunking_mtc.mtc.task_builder import (
     ANCHOR_PATH_CONSTRAINT_MIN_Z,
     ANCHOR_PATH_CONSTRAINT_XY_SIZE,
     DEFAULT_ANCHOR_MAX_PATH_Z,
@@ -14,26 +15,46 @@ from dual_fr3_trunking_mtc.mtc_prototype import (
     OMPL_NUM_PLANNING_ATTEMPTS,
     OMPL_PIPELINE_NAME,
     OMPL_PLANNER_ID,
-    _create_motion_planners,
-    _execute_stage_by_stage,
-    _max_link_z_path_constraint,
-    _planner_for_move_to,
-    build_mtc_stage_specs,
-    mtc_stage_sequence_to_dict,
-    mtc_stage_sequence_to_text,
+    create_motion_planners,
+    max_link_z_path_constraint,
+    planner_for_move_to,
 )
-from dual_fr3_trunking_mtc.scheduler import build_task_schedule
+from dual_fr3_trunking_mtc.mtc_prototype import _execute_stage_by_stage
+from dual_fr3_trunking_mtc.planner import build_segment_plans
+from dual_fr3_trunking_mtc.scheduler import build_task_plan
 from dual_fr3_trunking_mtc.segment_executor import (
     StageRunner,
     build_segment_stages,
     stage_description,
 )
+from dual_fr3_trunking_mtc.stages.compiler import build_mtc_stage_specs
+from dual_fr3_trunking_mtc.stages.specs import (
+    mtc_stage_sequence_to_dict,
+    mtc_stage_sequence_to_text,
+)
+
+
+_create_motion_planners = create_motion_planners
+_max_link_z_path_constraint = max_link_z_path_constraint
+_planner_for_move_to = planner_for_move_to
 
 TASK_FRAME = "left_fr3_link0"
 
 
 def _keypoint(name: str, x: float, y: float, in_slot: bool) -> Keypoint:
     return Keypoint(name, TASK_FRAME, (x, y, 0.0), in_slot)
+
+
+def _task_plan(
+    keypoints,
+    initial_leader_index: int = 1,
+    initial_follower_index: int = 0,
+) -> TaskPlan:
+    return build_task_plan(
+        build_segment_plans(keypoints),
+        initial_leader_index=initial_leader_index,
+        initial_follower_index=initial_follower_index,
+    )
 
 
 def _assert_same_yaw(actual: float, expected: float) -> None:
@@ -51,13 +72,13 @@ def test_build_mtc_stage_specs_from_task_schedule():
         _keypoint("kp2", 0.0, 0.2, True),
         _keypoint("kp3", 0.0, 0.3, False),
     ]
-    task_steps = build_task_schedule(
+    task_plan = _task_plan(
         keypoints,
         initial_leader_index=1,
         initial_follower_index=0,
     )
 
-    specs = build_mtc_stage_specs(keypoints, task_steps)
+    specs = build_mtc_stage_specs(task_plan)
 
     assert [spec.primitive for spec in specs] == [
         "seat_cable_on_edge",
@@ -76,6 +97,18 @@ def test_build_mtc_stage_specs_from_task_schedule():
     assert specs[5].planner == "PipelinePlanner"
     assert specs[6].planner == "CartesianPath"
     assert specs[8].executable is False
+
+
+def test_stage_compiler_accepts_task_plan_as_its_only_plan_input():
+    parameters = signature(build_mtc_stage_specs).parameters
+
+    assert next(iter(parameters)) == "task_plan"
+    assert {
+        "keypoints",
+        "task_steps",
+        "initial_leader_index",
+        "initial_follower_index",
+    }.isdisjoint(parameters)
 
 
 def test_create_motion_planners_configures_move_group_ompl():
@@ -168,17 +201,17 @@ def test_mtc_stage_sequence_interface_includes_execution_order():
         _keypoint("kp0", 0.0, 0.0, False),
         _keypoint("kp1", 0.0, 0.1, True),
     ]
-    task_steps = build_task_schedule(
+    task_plan = _task_plan(
         keypoints,
         initial_leader_index=1,
         initial_follower_index=0,
     )
-    specs = build_mtc_stage_specs(keypoints, task_steps)
+    specs = build_mtc_stage_specs(task_plan)
 
     sequence = mtc_stage_sequence_to_dict(specs)
     text = mtc_stage_sequence_to_text(specs)
 
-    assert sequence["interface_version"] == 1
+    assert sequence["interface_version"] == 2
     assert sequence["stage_count"] == 1
     assert sequence["stage_sequence"][0]["mtc_stage_type"] == "InfoOnly"
     assert sequence["stage_sequence"][0]["primitive"] == "seat_cable_on_edge"
@@ -195,12 +228,11 @@ def test_leader_lead_distance_must_be_positive():
         _keypoint("kp0", 0.0, 0.0, False),
         _keypoint("kp1", 0.1, 0.0, True),
     ]
-    task_steps = build_task_schedule(keypoints)
+    task_plan = _task_plan(keypoints)
 
     with pytest.raises(ValueError, match="leader_lead_distance"):
         build_mtc_stage_specs(
-            keypoints,
-            task_steps,
+            task_plan,
             leader_lead_distance=0.0,
         )
 
@@ -210,7 +242,7 @@ def test_formal_stage_specs_exclude_preparation_actions():
         _keypoint("kp0", 0.0, 0.0, False),
         _keypoint("kp1", 0.0, 0.1, True),
     ]
-    specs = build_mtc_stage_specs(keypoints, build_task_schedule(keypoints))
+    specs = build_mtc_stage_specs(_task_plan(keypoints))
 
     assert all(spec.action != "preparation" for spec in specs)
     assert [spec.primitive for spec in specs] == ["seat_cable_on_edge"]
@@ -235,7 +267,7 @@ def test_seat_edge_can_insert_a_profile_based_gripper_operation():
         ),
     ]
 
-    specs = build_mtc_stage_specs(keypoints, build_task_schedule(keypoints))
+    specs = build_mtc_stage_specs(_task_plan(keypoints))
 
     assert [spec.mtc_stage_type for spec in specs] == [
         "InfoOnly",
@@ -256,8 +288,7 @@ def test_default_orientation_directions_face_leader_and_follower_oppositely():
         _keypoint("kp3", 0.0, 0.3, False),
     ]
     specs = build_mtc_stage_specs(
-        keypoints,
-        build_task_schedule(keypoints),
+        _task_plan(keypoints),
     )
     oriented_arm_specs = [
         spec
@@ -277,8 +308,7 @@ def test_forward_forward_orientation_directions_restore_legacy_yaw():
         _keypoint("kp3", 0.0, 0.3, False),
     ]
     specs = build_mtc_stage_specs(
-        keypoints,
-        build_task_schedule(keypoints),
+        _task_plan(keypoints),
         leader_orientation_direction="forward",
         follower_orientation_direction="forward",
     )
@@ -308,8 +338,7 @@ def test_build_mtc_stage_specs_rejects_invalid_orientation_direction(
 
     with pytest.raises(ValueError, match="orientation direction"):
         build_mtc_stage_specs(
-            keypoints,
-            build_task_schedule(keypoints),
+            _task_plan(keypoints),
             **direction_arguments,
         )
 
@@ -367,8 +396,7 @@ def test_forward_forward_turn_specs_use_legacy_actor_current_yaw():
         _keypoint("entry_5", 0.4, 0.15, False),
     ]
     specs = build_mtc_stage_specs(
-        keypoints,
-        build_task_schedule(keypoints),
+        _task_plan(keypoints),
         leader_orientation_direction="forward",
         follower_orientation_direction="forward",
     )
@@ -466,8 +494,7 @@ def test_stage_execution_halts_after_first_execution_failure(monkeypatch):
     succeeded = _execute_stage_by_stage(
         object(),
         specs,
-        [],
-        [],
+        TaskPlan((), (), (), 1, 0),
         _stage_execution_args(),
         logging.getLogger("test_stage_halt"),
     )
@@ -495,8 +522,7 @@ def test_stage_execution_halts_after_planning_exception(monkeypatch):
     succeeded = _execute_stage_by_stage(
         object(),
         specs,
-        [],
-        [],
+        TaskPlan((), (), (), 1, 0),
         _stage_execution_args(),
         logging.getLogger("test_stage_exception_halt"),
     )
@@ -537,8 +563,7 @@ def test_stage_execution_dispatches_gripper_without_arm_planning(monkeypatch):
     succeeded = _execute_stage_by_stage(
         object(),
         [spec],
-        [],
-        [],
+        TaskPlan((), (), (), 1, 0),
         _stage_execution_args(),
         logging.getLogger("test_gripper_stage"),
         gripper_controller=FakeGripperController(),
@@ -549,3 +574,38 @@ def test_stage_execution_dispatches_gripper_without_arm_planning(monkeypatch):
     assert len(requests) == 1
     assert requests[0].actor == "follower"
     assert requests[0].profile == "cable_body"
+
+
+def test_confirmation_required_stage_fails_closed_without_callback(monkeypatch):
+    controller_calls = []
+
+    class FakeGripperController:
+        @staticmethod
+        def execute(_request):
+            controller_calls.append(True)
+            return True
+
+    spec = SimpleNamespace(
+        executable=True,
+        confirmation_required=True,
+        stage_index=0,
+        stage_key="preparation:leader:close",
+        name="leader_close",
+        mtc_stage_type="GripperOperation",
+        actor="leader",
+        gripper_profile="cable_tip",
+        gripper_action="",
+        gripper_width_override=None,
+    )
+
+    succeeded = _execute_stage_by_stage(
+        object(),
+        [spec],
+        TaskPlan((), (), (), 1, 0),
+        _stage_execution_args(),
+        logging.getLogger("test_confirmation_fail_closed"),
+        gripper_controller=FakeGripperController(),
+    )
+
+    assert succeeded is False
+    assert not controller_calls

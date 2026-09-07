@@ -9,43 +9,76 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from dual_fr3_trunking_mtc.models import (
-    DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
-    DEFAULT_LEADER_ORIENTATION_DIRECTION,
-)
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, launch_default
 
 
 def generate_launch_description():
-    use_fake_hardware = DeclareLaunchArgument("use_fake_hardware", default_value="true")
-    fake_sensor_commands = DeclareLaunchArgument("fake_sensor_commands", default_value="true")
-    left_robot_ip = DeclareLaunchArgument("left_robot_ip", default_value="172.16.0.2")
-    right_robot_ip = DeclareLaunchArgument("right_robot_ip", default_value="172.16.0.3")
-    load_gripper = DeclareLaunchArgument("load_gripper", default_value="true")
+    use_fake_hardware = DeclareLaunchArgument(
+        "use_fake_hardware",
+        default_value=launch_default(DEFAULTS.use_fake_hardware),
+    )
+    fake_sensor_commands = DeclareLaunchArgument(
+        "fake_sensor_commands",
+        default_value=launch_default(DEFAULTS.fake_sensor_commands),
+    )
+    left_robot_ip = DeclareLaunchArgument(
+        "left_robot_ip",
+        default_value=launch_default(DEFAULTS.left_robot_ip),
+    )
+    right_robot_ip = DeclareLaunchArgument(
+        "right_robot_ip",
+        default_value=launch_default(DEFAULTS.right_robot_ip),
+    )
+    load_gripper = DeclareLaunchArgument(
+        "load_gripper",
+        default_value=launch_default(DEFAULTS.load_gripper),
+    )
     start_gripper = DeclareLaunchArgument(
         "start_gripper",
-        default_value="true",
+        default_value=launch_default(DEFAULTS.start_gripper),
     )
-    ee_id = DeclareLaunchArgument("ee_id", default_value="franka_hand")
-    use_rviz = DeclareLaunchArgument("use_rviz", default_value="true")
+    ee_id = DeclareLaunchArgument(
+        "ee_id",
+        default_value=launch_default(DEFAULTS.ee_id),
+    )
+    use_rviz = DeclareLaunchArgument(
+        "use_rviz",
+        default_value=launch_default(DEFAULTS.use_rviz),
+    )
     keypoints_file = DeclareLaunchArgument(
         "keypoints_file",
         default_value=os.path.join(
             get_package_share_directory("dual_fr3_trunking_mtc"), "config", "keypoints.yaml"
         ),
     )
-    task_frame = DeclareLaunchArgument("task_frame", default_value="left_fr3_link0")
+    task_frame = DeclareLaunchArgument(
+        "task_frame",
+        default_value=launch_default(DEFAULTS.task_frame),
+    )
     leader_orientation_direction = DeclareLaunchArgument(
         "leader_orientation_direction",
-        default_value=DEFAULT_LEADER_ORIENTATION_DIRECTION,
+        default_value=launch_default(DEFAULTS.leader_orientation_direction),
     )
     follower_orientation_direction = DeclareLaunchArgument(
         "follower_orientation_direction",
-        default_value=DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
+        default_value=launch_default(DEFAULTS.follower_orientation_direction),
     )
-    keypoint_marker_scale = DeclareLaunchArgument("keypoint_marker_scale", default_value="0.02")
-    segment_line_width = DeclareLaunchArgument("segment_line_width", default_value="0.015")
-    marker_z_offset = DeclareLaunchArgument("marker_z_offset", default_value="0.0")
-    publish_labels = DeclareLaunchArgument("publish_labels", default_value="true")
+    keypoint_marker_scale = DeclareLaunchArgument(
+        "keypoint_marker_scale",
+        default_value=launch_default(DEFAULTS.keypoint_marker_scale),
+    )
+    segment_line_width = DeclareLaunchArgument(
+        "segment_line_width",
+        default_value=launch_default(DEFAULTS.segment_line_width),
+    )
+    marker_z_offset = DeclareLaunchArgument(
+        "marker_z_offset",
+        default_value=launch_default(DEFAULTS.marker_z_offset),
+    )
+    publish_labels = DeclareLaunchArgument(
+        "publish_labels",
+        default_value=launch_default(DEFAULTS.publish_labels),
+    )
 
     moveit_demo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(

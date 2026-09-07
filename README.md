@@ -2,6 +2,9 @@
 
 `dual_fr3_trunking_mtc` 是一个面向双臂 FR3 线槽走线任务的 Python 优先规划包。
 
+当前启动链、数据流、模块边界和扩展位置见
+[ARCHITECTURE.md](ARCHITECTURE.md)。
+
 计划新增的 D455 + SAM2 线缆视觉模块，其纯 Python 核心任务、离线测试、输入输出和
 后续 ROS 2 适配边界见 [VISION_MODULE_HANDOFF.md](VISION_MODULE_HANDOFF.md)。
 
@@ -12,8 +15,9 @@
 ```text
 关键点 YAML
 → 根据 in_slot 判断每一段动作类型
-→ 生成 leader/follower 全局任务调度
-→ 映射成 MTC 原型 primitive
+→ 生成 SegmentPlan[]
+→ scheduler 生成统一 TaskPlan
+→ Stage compiler 从 TaskPlan 编译 preparation + formal 统一 StageSpec 程序
 → 发布 JSON 摘要、RViz marker 和 MTC stage sequence
 ```
 
@@ -60,10 +64,22 @@ dual_fr3_trunking_mtc/
   config/
     keypoints.yaml              # 示例关键点配置
   dual_fr3_trunking_mtc/
-    models.py                   # Keypoint / SegmentPlan 数据模型
+    models.py                   # Keypoint / SegmentPlan / TaskPlan 数据模型
     planner.py                  # 关键点解析、段分类、段级 recipe 生成
-    scheduler.py                # leader/follower 全局任务调度
-    mtc_prototype.py            # MTC 原型 primitive 构建和 stage sequence 发布
+    scheduler.py                # SegmentPlan[] -> TaskPlan 全局任务调度
+    stages/
+      specs.py                  # 可序列化的 MtcStageSpec
+      compiler.py               # TaskPlan -> MtcStageSpec
+    mtc/
+      task_builder.py           # MtcStageSpec -> MTC Task
+      executor.py               # 逐 stage 重新规划和执行
+    runtime/
+      config.py                 # launch/CLI/节点共享的默认配置
+      stage_publisher.py        # stage sequence ROS 发布
+    mtc_prototype.py            # 兼容入口和顶层流程编排
+    preparation.py              # 准备 StageSpec 编译和交互确认
+    readiness.py                # 启动就绪闸门
+    gripper.py                  # 夹爪 profile 与后端控制
     markers.py                  # RViz marker 构造
     ros_node.py                 # ROS 2 节点
   launch/
@@ -193,14 +209,15 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 - 默认情况下：`dual_fr3_moveit_config/launch/demo.launch.py`
 - MTC 原型节点 `trunking_mtc_prototype.py`
 
-它的用途是验证“scheduler 输出能否被映射成 MoveIt Task Constructor stage”。
+它的用途是验证“scheduler 的 TaskPlan 能否被映射成 MoveIt Task Constructor stage”。
 它不会启动 `trunking_plan_node.py`，也不会发布 RViz 关键点小球；它会自己读取
 同一个 `keypoints.yaml`，在进程内部调用 planner/scheduler，然后创建 MTC task。
 
 `mtc_prototype.launch.py` 额外做了几件 `demo.launch.py` 没有做的事：
 
-- 给 MTC Python 节点显式传入 `robot_description`、`robot_description_semantic`
-  和 `kinematics.yaml`，让 `task.loadRobotModel(node)` 能加载双臂模型
+- 通过 `dual_fr3_moveit_config.moveit_resources` 给 MTC Python 节点传入
+  `robot_description`、`robot_description_semantic`、kinematics 和 OMPL 参数；
+  MoveGroup 与 MTC 不再各自复制 xacro/YAML 构造逻辑
 - 根据 task schedule 创建 MTC `CurrentState` 和 action primitive stage
 - 发布 MTC stage sequence，作为后续执行模块的接口
 - 启动 MoveIt demo 时给 `move_group` 额外加载
@@ -219,12 +236,12 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 当前手动规定的 action primitive 是：
 
 ```text
-preparation（独立模块 dual_fr3_trunking_mtc/preparation.py）：
-  MoveTo(PipelinePlanner / OMPL RRTConnect): leader 到第二个关键点上方 0.15 m
-  MoveTo(PipelinePlanner / OMPL RRTConnect): follower 到第一个关键点上方 0.15 m
+preparation phase（preparation.py 编译为统一 MtcStageSpec）：
+  MoveTo(PipelinePlanner / OMPL RRTConnect): leader 到第二个关键点上方 0.05 m
+  MoveTo(PipelinePlanner / OMPL RRTConnect): follower 到第一个关键点上方 0.05 m
   键盘确认后 GripperProfile(cable_tip): leader 明确执行配置中的 Move/Grasp
   键盘确认后 GripperProfile(cable_tip): follower 明确执行配置中的 Move/Grasp
-  键盘确认后 Merger[MoveRelative(CartesianPath) x 2]: 双臂同步向下 0.15 m
+  键盘确认后 Merger[MoveRelative(CartesianPath) x 2]: 双臂同步向下 0.05 m
 
 seat_edge:
   InfoOnly(seat_cable_on_edge): 先执行物理卡线动作（当前为占位，不发运动命令）
@@ -281,8 +298,8 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `task_frame`：关键点 YAML 未显式写 `default_frame` 时使用的任务坐标系
 - `initial_leader_index`：任务调度器的 leader 初始关键点 index，默认 `1`
 - `initial_follower_index`：任务调度器的 follower 初始关键点 index，默认 `0`
-- `preparation_enabled`：是否在正式任务前执行准备动作模块，默认 `true`
-- `preparation_height`：leader/follower 初始悬停高度及随后同步下降距离，默认 `0.15` m
+- `preparation_enabled`：是否在统一 Stage 程序前部加入 preparation phase，默认 `true`
+- `preparation_height`：leader/follower 初始悬停高度及随后同步下降距离，默认 `0.05` m
 - `preparation_interactive`：夹爪闭合和双臂下降前是否等待键盘确认，默认 `true`
 - `gripper_profiles_file`：夹爪 profile 和不可突破的安全上限配置，默认
   `config/gripper_profiles.yaml`
@@ -296,7 +313,7 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `follower_orientation_direction`：follower TCP yaw 相对路径的方向，取值含义同上，默认 `forward`
 - `motion_velocity_scaling`：MTC 运动速度缩放，默认 `0.2`
 - `motion_acceleration_scaling`：MTC 运动加速度缩放，默认 `0.2`
-- `anchor_max_path_z`：`direct_move_to_next_anchor` 的 OMPL 路径中，leader TCP 在关键点坐标系下允许的最大 z，默认 `0.3` m
+- `anchor_max_path_z`：`direct_move_to_next_anchor` 的 OMPL 路径中，leader TCP 在关键点坐标系下允许的最大 z，默认 `0.4` m
 - `leader_lead_distance`：`seat_edge` 前 leader 沿路径切向让位的距离，默认 `0.10` m
 - `tool_roll`：任务级 TCP roll，默认 `π`，使夹爪朝向工作面
 - `tool_pitch`：任务级 TCP pitch，默认 `0.0`
@@ -312,6 +329,8 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `mtc_keep_alive_sec`：MTC 节点完成后继续保留 topic publisher 的时间，默认 `30.0`
 - `use_gazebo`：是否切换到 Gazebo 版本的 MoveIt 启动文件，默认 `false`
 - `gz_args`：传给 Gazebo 的参数，默认 `empty.sdf -r`
+- `gazebo_effort`：是否在 Gazebo URDF 中暴露 effort command interface，默认
+  `false`；MoveGroup 和 MTC 节点共用该值
 
 例如，在 Gazebo 中执行默认准备流程和正式任务：
 
@@ -353,8 +372,9 @@ metadata:
 `seat_edge` 操作时不允许旧的整条 solution 一次性执行模式。
 
 在 `execute:=false` 的预览模式中，准备动作和正式任务会构建为一条 MTC 任务供
-RViz 检查；实际执行时准备模块逐步从机器人最新状态重新规划并执行，完成后再从
-最新状态规划正式任务。双臂下降由一个 MTC `Merger` 同步合并左右 Cartesian
+RViz 检查。两个 phase 使用同一 `MtcStageSpec`、task builder 和 fail-closed
+executor；实际执行时先逐 Stage 执行 preparation，再从最新机器人状态规划
+formal phase。双臂下降由一个 MTC `Merger` 同步合并左右 Cartesian
 轨迹，而不是顺序执行两个独立的单臂下降命令。
 
 例如，把 anchor 阶段整个 OMPL 路径中的 leader TCP 高度限制为 `0.15 m`：
@@ -693,8 +713,11 @@ ros2 service call /dual_fr3_trunking_planner/replan std_srvs/srv/Trigger {}
 - `in_slot` 段级动作分类
 - 段级 waypoint 插值
 - leader/follower 全局任务调度
-- 独立准备动作模块：双臂依次到初始关键点上方，依次确认闭合夹爪，再通过
-  MTC `Merger` 合并为同步双臂 Cartesian 下移；准备完成后才进入正式任务
+- 单向规划数据流：`Keypoint[] -> SegmentPlan[] -> TaskPlan -> MtcStageSpec[]`；
+  scheduler 不再重复分类 Segment，Stage compiler 不再接收分离的关键点和 TaskStep
+- 统一 Stage 程序：preparation 和 formal 共用 `MtcStageSpec`、MTC builder、
+  逐 Stage executor 和 JSON/text 序列化；双臂同步下移由递归子 Stage 表示的
+  MTC `Merger` 构造
 - MTC 原型正式 stage 构建：`seat_edge` 展开为 leader Cartesian 让位 + follower turn/direct MoveTo，
   `straighten` 展开为
   Cartesian in-place turn + Cartesian move，`move_anchor` 展开为
@@ -702,9 +725,9 @@ ros2 service call /dual_fr3_trunking_planner/replan std_srvs/srv/Trigger {}
 - 终段 `seat_edge`：当 leader 已在最后关键点、follower 位于倒数第二个关键点时，
   只保留卡线占位动作，跳过现有两臂让位、转向和移动
 - 规划摘要发布
-- MTC stage sequence JSON/text 发布
+- MTC stage sequence v2 JSON/text 发布，包含 `phase`、确认标记和复合子 Stage
 - RViz marker 发布
-- launch 集成 `dual_fr3_moveit_config`
+- launch 集成 `dual_fr3_moveit_config`，并复用共享 MoveIt 资源构造器
 - 每个 stage 都会带稳定的 `stage_key`，格式由 `step/action/actor/from_keypoint/to_keypoint/primitive`
   组合生成，排查问题时优先看这个，不要硬记 stage 编号
 
