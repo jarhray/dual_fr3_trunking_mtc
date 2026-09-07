@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 from typing import Sequence
 
@@ -22,6 +23,12 @@ from ..models import (
 from ..runtime.config import DEFAULTS
 from ..stages.compiler import build_mtc_stage_specs, finger_joint_for_ik_frame
 from ..stages.specs import MtcStageSpec
+from .path_length import anchor_path_length_cost, validate_path_length_ratio
+from .cartesian_validation import (
+    cartesian_path_cost,
+    merged_cartesian_path_cost,
+    validate_cartesian_settings,
+)
 
 
 OMPL_PIPELINE_NAME = "move_group"
@@ -38,6 +45,7 @@ ANCHOR_PATH_CONSTRAINT_XY_SIZE = 4.0
 def import_mtc_modules():
     try:
         import rclcpp
+        import moveit.core  # noqa: F401 - register RobotTrajectory/RobotState bindings
         from moveit.task_constructor import core, stages
     except ImportError as exc:
         raise RuntimeError(
@@ -54,10 +62,13 @@ def create_motion_planners(
     cartesian_step_size: float,
     motion_velocity_scaling: float,
     motion_acceleration_scaling: float,
+    cartesian_jump_threshold: float = DEFAULTS.cartesian_jump_threshold,
 ):
+    validate_cartesian_settings(cartesian_jump_threshold, DEFAULTS.cartesian_path_tolerance)
     cartesian = core.CartesianPath()
     cartesian.step_size = cartesian_step_size
-    cartesian.jump_threshold = 0.0
+    cartesian.jump_threshold = cartesian_jump_threshold
+    cartesian.min_fraction = 1.0
     cartesian.max_velocity_scaling_factor = motion_velocity_scaling
     cartesian.max_acceleration_scaling_factor = motion_acceleration_scaling
 
@@ -160,6 +171,17 @@ def _pose_at_keypoint(
     return pose
 
 
+def preparation_pose_goal(task_plan, spec, tool_roll, tool_pitch):
+    """Create the shared TCP goal for IK sampling and preparation planning."""
+    target = _pose_at_keypoint(
+        task_plan.keypoints[spec.from_index], tool_roll, tool_pitch, spec.target_yaw,
+    )
+    target.pose.position.x += spec.vector[0]
+    target.pose.position.y += spec.vector[1]
+    target.pose.position.z += spec.vector[2]
+    return target
+
+
 def create_mtc_task(
     node,
     task_plan: TaskPlan,
@@ -179,9 +201,19 @@ def create_mtc_task(
     follower_orientation_direction: str = DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     anchor_max_path_z: float = DEFAULT_ANCHOR_MAX_PATH_Z,
     gripper_profiles: GripperProfileRegistry | None = None,
+    anchor_max_path_length_ratio: float = DEFAULTS.anchor_max_path_length_ratio,
+    recovery_pose_goals: dict[str, PoseStamped] | None = None,
+    cartesian_jump_threshold: float = DEFAULTS.cartesian_jump_threshold,
+    cartesian_path_tolerance: float = DEFAULTS.cartesian_path_tolerance,
+    preparation_joint_goals: dict[str, dict[str, float]] | None = None,
+    start_scene=None,
 ):
+    validate_path_length_ratio(anchor_max_path_length_ratio)
+    validate_cartesian_settings(cartesian_jump_threshold, cartesian_path_tolerance)
     _rclcpp, core, stages = import_mtc_modules()
     keypoints = task_plan.keypoints
+    recovery_pose_goals = recovery_pose_goals or {}
+    preparation_joint_goals = preparation_joint_goals or {}
 
     cartesian, jointspace, ompl = create_motion_planners(
         core,
@@ -189,12 +221,19 @@ def create_mtc_task(
         cartesian_step_size,
         motion_velocity_scaling,
         motion_acceleration_scaling,
+        cartesian_jump_threshold,
     )
 
     task = core.Task()
     task.name = "dual_fr3_trunking_mtc_prototype"
-    task.loadRobotModel(node)
-    task.add(stages.CurrentState("current_state"))
+    if start_scene is None:
+        task.loadRobotModel(node)
+        task.add(stages.CurrentState("current_state"))
+    else:
+        task.setRobotModel(start_scene.robot_model)
+        start = stages.FixedState("current_state")
+        start.setState(copy.copy(start_scene))
+        task.add(start)
 
     specs = list(stage_specs) if stage_specs is not None else build_mtc_stage_specs(
         task_plan,
@@ -217,20 +256,34 @@ def create_mtc_task(
 
         if spec.mtc_stage_type == "Merger":
             merger = core.Merger(spec.name)
+            merger.setCostTerm(merged_cartesian_path_cost(
+                [child.ik_frame for child in spec.children],
+                cartesian_path_tolerance, spec.name,
+            ))
             for child in spec.children:
-                move = stages.MoveRelative(child.name, cartesian)
+                target = recovery_pose_goals.get(child.name)
+                move = (
+                    stages.MoveTo(child.name, cartesian) if target is not None
+                    else stages.MoveRelative(child.name, cartesian)
+                )
                 move.group = child.group
                 move.ik_frame = _identity_ik_frame(child.ik_frame)
-                move.setDirection(
-                    Vector3Stamped(
-                        header=Header(frame_id=child.frame_id),
-                        vector=Vector3(
-                            x=child.vector[0],
-                            y=child.vector[1],
-                            z=child.vector[2],
-                        ),
+                move.setCostTerm(cartesian_path_cost(
+                    child.ik_frame, cartesian_path_tolerance, child.name,
+                ))
+                if target is not None:
+                    move.setGoal(target)
+                else:
+                    move.setDirection(
+                        Vector3Stamped(
+                            header=Header(frame_id=child.frame_id),
+                            vector=Vector3(
+                                x=child.vector[0],
+                                y=child.vector[1],
+                                z=child.vector[2],
+                            ),
+                        )
                     )
-                )
                 merger.insert(move)
             task.add(merger)
             continue
@@ -275,18 +328,21 @@ def create_mtc_task(
                     anchor_max_path_z,
                 )
             move_to.group = spec.group
+            if spec.planner == "CartesianPath":
+                move_to.setCostTerm(cartesian_path_cost(
+                    spec.ik_frame, cartesian_path_tolerance, spec.name,
+                    stationary=spec.primitive == "turn_gripper_to_next_keypoint",
+                ))
             if spec.primitive == "move_above_initial_keypoint":
                 move_to.ik_frame = _identity_ik_frame(spec.ik_frame)
-                target = _pose_at_keypoint(
-                    keypoints[spec.from_index],
-                    tool_roll,
-                    tool_pitch,
-                    spec.target_yaw,
-                )
-                target.pose.position.x += spec.vector[0]
-                target.pose.position.y += spec.vector[1]
-                target.pose.position.z += spec.vector[2]
-                move_to.setGoal(target)
+                if spec.name in preparation_joint_goals:
+                    # Fix the selected IK branch; a pose-only goal could choose
+                    # another elbow/wrist configuration and invalidate lookahead.
+                    move_to.setGoal(dict(preparation_joint_goals[spec.name]))
+                else:
+                    move_to.setGoal(preparation_pose_goal(
+                        task_plan, spec, tool_roll, tool_pitch,
+                    ))
             elif spec.primitive == "turn_gripper_to_next_keypoint":
                 move_to.ik_frame = _identity_ik_frame(spec.ik_frame)
                 move_to.setGoal(
@@ -302,32 +358,47 @@ def create_mtc_task(
                 "direct_move_to_seat_edge_keypoint",
             }:
                 move_to.ik_frame = _identity_ik_frame(spec.ik_frame)
-                move_to.setGoal(
-                    _pose_at_keypoint(
-                        keypoints[spec.to_index],
-                        tool_roll,
-                        tool_pitch,
-                        spec.target_yaw,
-                    )
+                target = _pose_at_keypoint(
+                    keypoints[spec.to_index],
+                    tool_roll,
+                    tool_pitch,
+                    spec.target_yaw,
                 )
+                move_to.setGoal(target)
+                if spec.primitive == "direct_move_to_next_anchor":
+                    move_to.setCostTerm(
+                        anchor_path_length_cost(
+                            spec.ik_frame, target, anchor_max_path_length_ratio, spec.name
+                        )
+                    )
             else:
                 move_to.setGoal(dict(spec.joint_goal))
             task.add(move_to)
             continue
 
-        move = stages.MoveRelative(spec.name, cartesian)
+        target = recovery_pose_goals.get(spec.name)
+        move = (
+            stages.MoveTo(spec.name, cartesian) if target is not None
+            else stages.MoveRelative(spec.name, cartesian)
+        )
         move.group = spec.group
         move.ik_frame = _identity_ik_frame(spec.ik_frame)
-        move.setDirection(
-            Vector3Stamped(
-                header=Header(frame_id=spec.frame_id),
-                vector=Vector3(
-                    x=spec.vector[0],
-                    y=spec.vector[1],
-                    z=spec.vector[2],
-                ),
+        move.setCostTerm(cartesian_path_cost(
+            spec.ik_frame, cartesian_path_tolerance, spec.name,
+        ))
+        if target is not None:
+            move.setGoal(target)
+        else:
+            move.setDirection(
+                Vector3Stamped(
+                    header=Header(frame_id=spec.frame_id),
+                    vector=Vector3(
+                        x=spec.vector[0],
+                        y=spec.vector[1],
+                        z=spec.vector[2],
+                    ),
+                )
             )
-        )
         task.add(move)
 
     return task, specs

@@ -136,7 +136,8 @@ def test_create_motion_planners_configures_move_group_ompl():
     )
 
     assert cartesian.step_size == pytest.approx(0.01)
-    assert cartesian.jump_threshold == pytest.approx(0.0)
+    assert cartesian.jump_threshold == pytest.approx(2.0)
+    assert cartesian.min_fraction == pytest.approx(1.0)
     assert jointspace.max_velocity_scaling_factor == pytest.approx(0.1)
     assert ompl.node is node
     assert ompl.pipeline == OMPL_PIPELINE_NAME
@@ -194,6 +195,76 @@ def test_anchor_max_z_constraint_limits_tcp_in_keypoint_frame():
 def test_anchor_max_z_constraint_rejects_invalid_upper_bound():
     with pytest.raises(ValueError, match="anchor_max_path_z"):
         _max_link_z_path_constraint("frame", "tcp", float("inf"))
+
+
+@pytest.mark.parametrize("selected", [None, {0}, {1}, {2}])
+def test_builder_applies_both_anchor_limits_and_absolute_recovery_goals(monkeypatch, selected):
+    from dual_fr3_trunking_mtc.mtc import task_builder
+
+    class Planner:
+        def __init__(self, *_args):
+            pass
+
+    class Task:
+        def __init__(self):
+            self.stages = []
+
+        def loadRobotModel(self, _node):
+            pass
+
+        def add(self, stage):
+            self.stages.append(stage)
+
+    class MoveTo:
+        def __init__(self, name, planner):
+            self.name = name
+
+        def setGoal(self, goal):
+            self.goal = goal
+
+        def setCostTerm(self, cost):
+            self.cost = cost
+
+    core = SimpleNamespace(
+        CartesianPath=Planner, JointInterpolationPlanner=Planner,
+        PipelinePlanner=Planner, Task=Task,
+    )
+    stages = SimpleNamespace(CurrentState=lambda name: name, MoveTo=MoveTo)
+    monkeypatch.setattr(task_builder, "import_mtc_modules", lambda: (None, core, stages))
+    keypoints = [_keypoint("a", 0.0, 0.0, True), _keypoint("b", 0.0, 0.2, True)]
+    specs = [
+        SimpleNamespace(
+            name=primitive, primitive=primitive, stage_index=index,
+            executable=True, mtc_stage_type=kind, planner=planner,
+            frame_id=TASK_FRAME, ik_frame="left_fr3_hand_tcp", group="left_fr3_arm",
+            to_index=1, target_yaw=0.0,
+        )
+        for index, (primitive, planner, kind) in enumerate([
+            ("direct_move_to_next_anchor", "PipelinePlanner", "MoveTo"),
+            ("direct_move_to_seat_edge_keypoint", "JointInterpolationPlanner", "MoveTo"),
+            ("cartesian_move_to_next_keypoint", "CartesianPath", "MoveRelative"),
+        ])
+    ]
+    from geometry_msgs.msg import PoseStamped
+    recovery_target = PoseStamped()
+    recovery_target.header.frame_id = "world"
+    recovery_target.pose.position.y = 0.2
+    recovery_target.pose.orientation.w = 1.0
+    task, _ = task_builder.create_mtc_task(
+        object(), _task_plan(keypoints), specs, selected_stage_indices=selected,
+        recovery_pose_goals={"cartesian_move_to_next_keypoint": recovery_target},
+    )
+    moves = task.stages[1:]
+    assert len(moves) == (3 if selected is None else 1)
+    for move in moves:
+        is_anchor = move.name == "direct_move_to_next_anchor"
+        assert hasattr(move, "cost") is (
+            is_anchor or move.name == "cartesian_move_to_next_keypoint"
+        )
+        assert hasattr(move, "path_constraints") is is_anchor
+        if move.name == "cartesian_move_to_next_keypoint":
+            # Recovery uses the saved endpoint, not the original relative vector.
+            assert move.goal is recovery_target
 
 
 def test_mtc_stage_sequence_interface_includes_execution_order():
@@ -454,6 +525,7 @@ def _stage_execution_args():
         motion_velocity_scaling=0.1,
         motion_acceleration_scaling=0.1,
         anchor_max_path_z=DEFAULT_ANCHOR_MAX_PATH_Z,
+        anchor_max_path_length_ratio=1.5,
         initial_leader_index=1,
         initial_follower_index=0,
         leader_lead_distance=0.1,
@@ -479,6 +551,7 @@ def test_stage_execution_halts_after_first_execution_failure(monkeypatch):
             return False
 
     def fake_create_mtc_task(*_args, selected_stage_indices, **_kwargs):
+        assert _kwargs["anchor_max_path_length_ratio"] == 1.5
         created_stage_indices.append(next(iter(selected_stage_indices)))
         return FakeTask(), []
 

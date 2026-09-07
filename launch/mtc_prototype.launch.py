@@ -84,6 +84,15 @@ def generate_launch_description():
     follower_orientation_direction = declare_argument(
         "follower_orientation_direction", DEFAULTS.follower_orientation_direction
     )
+    cartesian_step_size = declare_argument("cartesian_step_size", DEFAULTS.cartesian_step_size)
+    cartesian_jump_threshold = declare_argument(
+        "cartesian_jump_threshold", DEFAULTS.cartesian_jump_threshold,
+        description="Relative joint-space jump factor (> 1); incomplete paths are rejected",
+    )
+    cartesian_path_tolerance = declare_argument(
+        "cartesian_path_tolerance", DEFAULTS.cartesian_path_tolerance,
+        description="Maximum TCP line deviation or in-place turn drift in meters",
+    )
     motion_velocity_scaling = declare_argument(
         "motion_velocity_scaling", DEFAULTS.motion_velocity_scaling
     )
@@ -101,6 +110,11 @@ def generate_launch_description():
     leader_lead_distance = declare_argument(
         "leader_lead_distance", DEFAULTS.leader_lead_distance
     )
+    anchor_max_path_length_ratio = declare_argument(
+        "anchor_max_path_length_ratio",
+        DEFAULTS.anchor_max_path_length_ratio,
+        description="Maximum anchor TCP path length / actual start-to-target distance (>= 1)",
+    )
     tool_roll = declare_argument("tool_roll", DEFAULTS.tool_roll)
     tool_pitch = declare_argument("tool_pitch", DEFAULTS.tool_pitch)
     preparation_enabled = declare_argument(
@@ -116,6 +130,17 @@ def generate_launch_description():
         DEFAULTS.preparation_interactive,
         description="Require keyboard confirmation for gripping and descent",
     )
+    preparation_search_arguments = [
+        declare_argument(name, getattr(DEFAULTS, name), description=description)
+        for name, description in (
+            ("preparation_ik_candidates", "Maximum distinct preparation IK candidates per arm"),
+            ("preparation_ik_attempts", "Maximum preparation IK seeds per arm"),
+            ("preparation_ik_timeout", "Maximum seconds per preparation IK seed"),
+            ("preparation_min_joint_distance", "Minimum IK candidate joint distance in radians"),
+            ("preparation_candidate_attempts", "Maximum rounds across preparation pairs"),
+            ("preparation_search_timeout", "Search seconds, checked between native solver calls"),
+        )
+    ]
     gripper_profiles_file = declare_argument(
         "gripper_profiles_file",
         os.path.join(
@@ -143,7 +168,16 @@ def generate_launch_description():
     plan = declare_argument("plan", DEFAULTS.plan)
     execute = declare_argument("execute", DEFAULTS.execute)
     execute_stage_by_stage = declare_argument(
-        "execute_stage_by_stage", DEFAULTS.execute_stage_by_stage
+        "execute_stage_by_stage", DEFAULTS.execute_stage_by_stage,
+        description="Execute cached stages from the successful full plan; recover on failure",
+    )
+    planning_attempts = declare_argument(
+        "planning_attempts", DEFAULTS.planning_attempts,
+        description="Planning attempts, including pipeline retries within a preparation pair",
+    )
+    execution_replan_attempts = declare_argument(
+        "execution_replan_attempts", DEFAULTS.execution_replan_attempts,
+        description="Maximum recovery replans of unfinished stages after execution failure",
     )
     readiness_timeout = declare_argument(
         "readiness_timeout", DEFAULTS.readiness_timeout
@@ -247,12 +281,20 @@ def generate_launch_description():
         LaunchConfiguration("leader_orientation_direction"),
         "--follower-orientation-direction",
         LaunchConfiguration("follower_orientation_direction"),
+        "--cartesian-step-size",
+        LaunchConfiguration("cartesian_step_size"),
+        "--cartesian-jump-threshold",
+        LaunchConfiguration("cartesian_jump_threshold"),
+        "--cartesian-path-tolerance",
+        LaunchConfiguration("cartesian_path_tolerance"),
         "--motion-velocity-scaling",
         LaunchConfiguration("motion_velocity_scaling"),
         "--motion-acceleration-scaling",
         LaunchConfiguration("motion_acceleration_scaling"),
         "--anchor-max-path-z",
         LaunchConfiguration("anchor_max_path_z"),
+        "--anchor-max-path-length-ratio",
+        LaunchConfiguration("anchor_max_path_length_ratio"),
         "--leader-lead-distance",
         LaunchConfiguration("leader_lead_distance"),
         "--tool-roll",
@@ -281,9 +323,18 @@ def generate_launch_description():
         LaunchConfiguration("execute"),
         "--execute-stage-by-stage",
         LaunchConfiguration("execute_stage_by_stage"),
+        "--planning-attempts",
+        LaunchConfiguration("planning_attempts"),
+        "--execution-replan-attempts",
+        LaunchConfiguration("execution_replan_attempts"),
         "--keep-alive-sec",
         LaunchConfiguration("mtc_keep_alive_sec"),
     ]
+
+    for argument in preparation_search_arguments:
+        mtc_arguments.extend([
+            "--" + argument.name.replace("_", "-"), LaunchConfiguration(argument.name),
+        ])
 
     def mtc_node(resources, condition):
         return Node(
@@ -392,15 +443,20 @@ def generate_launch_description():
             follower_ik_frame,
             leader_orientation_direction,
             follower_orientation_direction,
+            cartesian_step_size,
+            cartesian_jump_threshold,
+            cartesian_path_tolerance,
             motion_velocity_scaling,
             motion_acceleration_scaling,
             anchor_max_path_z,
+            anchor_max_path_length_ratio,
             leader_lead_distance,
             tool_roll,
             tool_pitch,
             preparation_enabled,
             preparation_height,
             preparation_interactive,
+            *preparation_search_arguments,
             gripper_profiles_file,
             preparation_leader_gripper_profile,
             preparation_follower_gripper_profile,
@@ -409,6 +465,8 @@ def generate_launch_description():
             plan,
             execute,
             execute_stage_by_stage,
+            planning_attempts,
+            execution_replan_attempts,
             readiness_timeout,
             state_max_age,
             home_grippers_before_execute,

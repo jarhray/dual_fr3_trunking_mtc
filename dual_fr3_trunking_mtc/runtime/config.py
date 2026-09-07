@@ -43,10 +43,18 @@ class TrunkingDefaults:
     leader_lead_distance: float = DEFAULT_LEADER_LEAD_DISTANCE
 
     # Motion planning.
-    cartesian_step_size: float = 0.01
+    cartesian_step_size: float = 0.005
+    # 1.5 truncates a continuous default FR3 path at about 90% because joint
+    # increments naturally grow towards the endpoint. Keep jump detection on;
+    # dense TCP validation independently rejects actual route excursions.
+    cartesian_jump_threshold: float = 2.0
+    cartesian_path_tolerance: float = 0.01
     motion_velocity_scaling: float = 0.2
     motion_acceleration_scaling: float = 0.2
-    anchor_max_path_z: float = 0.4
+    anchor_max_path_z: float = 0.6
+    anchor_max_path_length_ratio: float = 1.5
+    planning_attempts: int = 10
+    execution_replan_attempts: int = 2
     trajectory_execution_duration_scaling: float = 10.0
     trajectory_execution_goal_margin: float = 5.0
 
@@ -54,6 +62,12 @@ class TrunkingDefaults:
     preparation_enabled: bool = True
     preparation_height: float = 0.05
     preparation_interactive: bool = True
+    preparation_ik_candidates: int = 8
+    preparation_ik_attempts: int = 80
+    preparation_ik_timeout: float = 0.05
+    preparation_min_joint_distance: float = 0.3
+    preparation_candidate_attempts: int = 2
+    preparation_search_timeout: float = 180.0
     preparation_leader_gripper_profile: str = "cable_tip"
     preparation_follower_gripper_profile: str = "cable_tip"
 

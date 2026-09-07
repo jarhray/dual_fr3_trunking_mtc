@@ -1,0 +1,182 @@
+"""Execute a selected whole-task solution; replan only its unfinished suffix."""
+
+import copy
+from dataclasses import dataclass
+
+from geometry_msgs.msg import PoseStamped
+from moveit_msgs.msg import MoveItErrorCodes
+
+from ..gripper import GripperRequest
+from ..runtime.config import DEFAULTS
+from .planning import plan_with_retries
+
+
+# Only terminal MoveIt failures with a known failed stage can be recovered.
+# Cancellation, lost communication and exceptions must not restart motion.
+RECOVERABLE_EXECUTION_ERRORS = {
+    MoveItErrorCodes.INVALID_MOTION_PLAN,
+    MoveItErrorCodes.MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE,
+    MoveItErrorCodes.CONTROL_FAILED,
+    MoveItErrorCodes.TIMED_OUT,
+}
+
+
+@dataclass
+class CachedStage:
+    spec: object
+    solution: object | None
+
+
+def _solution_ids(message):
+    return {
+        item.info.id
+        for item in (*message.sub_solution, *message.sub_trajectory)
+        if item.info.id != 0
+    }
+
+
+def cache_selected_stages(planned):
+    """
+    Select stage solutions belonging to the chosen complete solution.
+
+    Stage.solutions[0] alone is insufficient: independently cheapest stages
+    need not be connected to each other. Match MTC introspection solution IDs.
+    """
+    introspection = planned.task.introspection()
+    selected_ids = _solution_ids(planned.solution.toMsg(introspection))
+    cached = []
+    for spec in planned.specs:
+        if not spec.executable:
+            continue
+        if spec.mtc_stage_type == "GripperOperation":
+            cached.append(CachedStage(spec, None))
+            continue
+        matches = []
+        for candidate in planned.task[spec.name].solutions:
+            ids = _solution_ids(candidate.toMsg(introspection))
+            if ids and ids.issubset(selected_ids):
+                matches.append(candidate)
+        if len(matches) != 1:
+            raise ValueError(f"cannot identify selected solution for stage {spec.name!r}")
+        cached.append(CachedStage(spec, matches[0]))
+    return cached
+
+
+def capture_relative_targets(cached):
+    """Freeze planned absolute endpoints before any relative motion executes."""
+    targets = {}
+    for item in cached:
+        spec = item.spec
+        if spec.mtc_stage_type == "Merger":
+            relatives = spec.children
+        elif spec.mtc_stage_type == "MoveRelative":
+            relatives = (spec,)
+        else:
+            continue
+        scene = item.solution.end.scene
+        state = copy.copy(scene.current_state)
+        state.update()
+        for relative in relatives:
+            target = PoseStamped()
+            target.header.frame_id = scene.planning_frame
+            target.pose = state.get_pose(relative.ik_frame)
+            targets[relative.name] = target
+    return targets
+
+
+def execute_cached_solution(
+    planned, node, task_plan, args, logger, gripper_controller=None,
+    gripper_profiles=None, confirmation_callback=None,
+    planner=plan_with_retries,
+):
+    """
+    Execute exact cached trajectories, with bounded recovery after failure.
+
+    Each action contains the stage subsolution from the same successful full
+    plan. This preserves motion geometry/timing while locating failures and
+    allowing profile-based gripper actions between motion stages.
+    """
+    recovery_limit = args.execution_replan_attempts
+    if recovery_limit < 0:
+        raise ValueError("execution_replan_attempts must be >= 0")
+    recoveries = 0
+    fixed_targets = {}
+    confirmed = set()
+    fixed_preparation_goals = copy.deepcopy(planned.preparation_joint_goals)
+    while True:
+        try:
+            cached = cache_selected_stages(planned)
+            for name, target in capture_relative_targets(cached).items():
+                # Preserve the original endpoint over multiple recoveries.
+                fixed_targets.setdefault(name, target)
+        except Exception:  # noqa: BLE001 - reject an unmapped solution before motion
+            logger.exception("cannot prepare selected solution for execution")
+            return False
+        logger.info("executing %d cached stages from the successful plan", len(cached))
+        for index, item in enumerate(cached):
+            spec = item.spec
+            if getattr(spec, "confirmation_required", False) and spec.stage_index not in confirmed:
+                if confirmation_callback is None or not confirmation_callback(spec):
+                    logger.error(
+                        "confirmation missing or declined for stage [%02d]", spec.stage_index,
+                    )
+                    return False
+                confirmed.add(spec.stage_index)
+            logger.info("executing cached stage [%02d] %s", spec.stage_index, spec.name)
+            if spec.mtc_stage_type == "GripperOperation":
+                try:
+                    succeeded = gripper_controller is not None and gripper_controller.execute(
+                        GripperRequest(
+                            actor=spec.actor, profile=spec.gripper_profile,
+                            action_override=spec.gripper_action or None,
+                            width_override=spec.gripper_width_override,
+                        )
+                    )
+                except Exception:  # noqa: BLE001 - grasp state is uncertain
+                    logger.exception("gripper stage [%02d] raised", spec.stage_index)
+                    return False
+                if not succeeded:
+                    logger.error("gripper stage [%02d] failed; stopping", spec.stage_index)
+                    return False
+                logger.info("gripper stage [%02d] completed", spec.stage_index)
+                continue
+
+            try:
+                result = planned.task.execute(item.solution)
+            except Exception:  # noqa: BLE001 - execution may still be active
+                logger.exception(
+                    "execution raised at stage [%02d]; motion state is uncertain, stopping",
+                    spec.stage_index,
+                )
+                return False
+            if result:
+                logger.info("stage [%02d] completed", spec.stage_index)
+                continue
+            code = getattr(result, "val", None)
+            if code not in RECOVERABLE_EXECUTION_ERRORS or recoveries >= recovery_limit:
+                logger.error(
+                    "stage [%02d] failed (MoveIt error %s); stopping after %d recoveries",
+                    spec.stage_index, code, recoveries,
+                )
+                return False
+
+            recoveries += 1
+            remaining = tuple(entry.spec for entry in cached[index:])
+            logger.warning(
+                "stage [%02d] failed (MoveIt error %s); recovery %d/%d: "
+                "replan %d unfinished stages from CurrentState to the original targets",
+                spec.stage_index, code, recoveries, recovery_limit, len(remaining),
+            )
+            planned = planner(
+                node, task_plan, remaining, args, logger,
+                gripper_profiles=gripper_profiles, recovery_pose_goals=fixed_targets,
+                preparation_joint_goals=fixed_preparation_goals,
+            )
+            if planned is None:
+                return False
+            if getattr(args, "publish_solution", DEFAULTS.publish_solution):
+                planned.task.publish(planned.solution)
+            break
+        else:
+            logger.info("cached MTC solution execution finished")
+            return True
