@@ -8,6 +8,8 @@ import math
 
 import numpy as np
 
+from .diagnostics import append_failure_comment
+
 
 LOGGER = logging.getLogger(__name__)
 # FR3 arm joints are bounded revolute joints. Subdivide their actual commanded
@@ -113,11 +115,14 @@ def anchor_path_length_cost(link_name: str, target, ratio: float, stage_name: st
                 f"{'accepted' if accepted else 'REJECTED'}"
             )
             LOGGER.log(
-                logging.INFO if accepted else logging.WARNING,
+                logging.INFO if accepted else logging.ERROR,
                 "%s: %s", stage_name, message,
             )
+            if not accepted:
+                append_failure_comment(solution, f"PATH_LENGTH_LIMIT: {message}")
             return length if accepted else math.inf
         except Exception as exc:  # noqa: BLE001 - never accept an unchecked path
+            append_failure_comment(solution, f"PATH_LENGTH_CHECK_ERROR: {exc}")
             LOGGER.exception("%s: TCP path length check failed: %s", stage_name, exc)
             return math.inf
 

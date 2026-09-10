@@ -8,6 +8,7 @@ import time
 import numpy as np
 from geometry_msgs.msg import Pose
 
+from .diagnostics import PlanningFailureHistory, log_planning_failure
 from .planning import PlannedTask, create_task_from_args
 from .task_builder import import_mtc_modules, preparation_pose_goal
 
@@ -183,18 +184,6 @@ def candidate_pair_indices(first_count, second_count):
                 yield first, second
 
 
-def _failure_summary(task, specs):
-    failures = []
-    for spec in specs:
-        if not spec.executable or spec.mtc_stage_type == "GripperOperation":
-            continue
-        stage = task[spec.name]
-        if stage.failures:
-            reason = stage.failures[0].comment or "rejected (see trajectory check log)"
-            failures.append(f"[{spec.stage_index:02d}] {spec.name}: {reason}")
-    return "; ".join(failures) or "no complete solution (timeout or unavailable continuation)"
-
-
 def _retryable_pipeline_failure(task, specs):
     """Retry stochastic pipeline failures before discarding a joint candidate."""
     failed = [
@@ -230,6 +219,7 @@ def plan_preparation_candidates(
         raise ValueError("preparation search requires one approach stage for each arm")
     approaches.sort(key=lambda s: s.actor != "leader")
     deadline = clock() + args.preparation_search_timeout
+    history = PlanningFailureHistory()
     try:
         snapshot = scene_provider(node)
         scene = snapshot.scene
@@ -238,6 +228,16 @@ def plan_preparation_candidates(
             target = preparation_pose_goal(task_plan, spec, args.tool_roll, args.tool_pitch)
             candidates.append(sampler(scene, target, spec, args, logger, deadline, clock=clock))
         if any(not group for group in candidates):
+            for spec, group in zip(approaches, candidates):
+                if not group:
+                    target = preparation_pose_goal(task_plan, spec, args.tool_roll, args.tool_pitch)
+                    point = target.pose.position
+                    logger.error(
+                        "[preparation-ik] %s group=%s TCP=%s: no IK candidate for "
+                        "target=(%.4f, %.4f, %.4f) m frame=%s",
+                        spec.name, spec.group, spec.ik_frame,
+                        point.x, point.y, point.z, target.header.frame_id,
+                    )
             logger.error(
                 "preparation search found no IK candidates for at least one arm; no motion issued",
             )
@@ -253,6 +253,7 @@ def plan_preparation_candidates(
                 remaining = deadline - clock()
                 if remaining <= 0.0:
                     logger.error("preparation search time budget exhausted; no motion issued")
+                    history.log_summary(logger)
                     return None
                 goals = {
                     approaches[0].name: candidates[0][first],
@@ -271,6 +272,7 @@ def plan_preparation_candidates(
                 for attempt in range(1, args.planning_attempts + 1):
                     if deadline <= clock():
                         logger.error("preparation search time budget exhausted; no motion issued")
+                        history.log_summary(logger)
                         return None
                     logger.info(
                         "preparation pair L%d/F%d, round %d/%d, planning attempt %d/%d: "
@@ -295,17 +297,21 @@ def plan_preparation_candidates(
                             snapshot.model_owner,
                         )
                     logger.warning(
-                        "preparation pair L%d/F%d rejected: %s", first+1, second+1,
-                        _failure_summary(task, specs),
+                        "preparation pair L%d/F%d rejected (round %d, attempt %d)",
+                        first+1, second+1, round_index+1, attempt,
+                    )
+                    log_planning_failure(
+                        task, specs, logger, task_plan=task_plan, args=args, history=history,
                     )
                     if not _retryable_pipeline_failure(task, specs):
                         break
                     if attempt < args.planning_attempts:
-                        logger.info(
+                        logger.warning(
                             "pipeline planning failed; retrying this preparation pair "
                             "before discarding its joint configuration",
                         )
         logger.error("all preparation candidates exhausted; no motion issued")
+        history.log_summary(logger)
     except Exception:  # noqa: BLE001 - configuration/binding failures must not start execution
         logger.exception("preparation candidate search failed; no motion issued")
     return None

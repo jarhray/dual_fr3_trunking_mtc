@@ -8,28 +8,22 @@ from typing import Any, Mapping
 import yaml
 
 
-GRIPPER_BACKENDS = ("franka", "gazebo", "fake")
+GRIPPER_BACKENDS = ("franka", "gazebo", "maniskill", "fake")
 GRIPPER_ACTIONS = ("move", "grasp", "hold")
 ACTOR_TO_SIDE = {"leader": "left", "follower": "right"}
 
 
-def resolve_gripper_backend(
-    *,
-    use_fake_hardware: bool,
-    use_gazebo: bool,
-) -> str:
-    """Resolve launch flags once, before constructing a gripper controller."""
-    if use_gazebo:
-        return "gazebo"
-    if use_fake_hardware:
-        return "fake"
-    return "franka"
+def resolve_gripper_backend(simulation_backend: str) -> str:
+    """Select the gripper interface from the single robot backend."""
+    from .runtime.config import resolve_simulation_backend
+    backend = resolve_simulation_backend(simulation_backend)
+    return "franka" if backend == "real" else backend
 
 
 def gripper_command_action_name(side: str, backend: str) -> str:
     if backend not in GRIPPER_BACKENDS:
         raise ValueError(f"unknown gripper backend: {backend!r}")
-    action_name = "gripper_cmd" if backend == "gazebo" else "gripper_action"
+    action_name = "gripper_cmd" if backend in ("gazebo", "maniskill") else "gripper_action"
     return f"/{side}_franka_gripper/{action_name}"
 
 
@@ -233,6 +227,7 @@ class GripperController:
         profiles: GripperProfileRegistry,
         backend: str,
         node_name: str = "dual_fr3_trunking_gripper",
+        use_sim_time: bool = False,
     ) -> None:
         if backend not in GRIPPER_BACKENDS:
             raise ValueError(f"unknown gripper backend: {backend!r}")
@@ -248,7 +243,9 @@ class GripperController:
         self.backend = backend
         self._context = Context()
         rclpy.init(context=self._context)
-        self.node = Node(node_name, context=self._context)
+        self.node = Node(node_name, context=self._context, parameter_overrides=[
+            rclpy.parameter.Parameter("use_sim_time", value=use_sim_time),
+        ])
         self._executor = SingleThreadedExecutor(context=self._context)
         self._clients: dict[tuple[str, str], Any] = {}
 

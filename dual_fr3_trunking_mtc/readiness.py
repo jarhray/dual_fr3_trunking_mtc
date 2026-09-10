@@ -39,9 +39,7 @@ class TrunkingReadinessGate(Node):
         super().__init__("dual_fr3_trunking_readiness_gate")
 
         self.declare_parameter("execute", DEFAULTS.execute)
-        self.declare_parameter("use_fake_hardware", DEFAULTS.use_fake_hardware)
-        self.declare_parameter("use_gazebo", DEFAULTS.use_gazebo)
-        self.declare_parameter("namespaced_arm_controllers", True)
+        self.declare_parameter("simulation_backend", DEFAULTS.simulation_backend)
         self.declare_parameter("start_gripper", DEFAULTS.start_gripper)
         self.declare_parameter(
             "home_grippers_before_execute",
@@ -52,17 +50,11 @@ class TrunkingReadinessGate(Node):
         self.declare_parameter("state_max_age", DEFAULTS.state_max_age)
 
         self.execute = bool(self.get_parameter("execute").value)
-        self.use_fake_hardware = bool(
-            self.get_parameter("use_fake_hardware").value
-        )
-        self.use_gazebo = bool(self.get_parameter("use_gazebo").value)
+        self.simulation_backend = self.get_parameter("simulation_backend").value
         self.gripper_backend = resolve_gripper_backend(
-            use_fake_hardware=self.use_fake_hardware,
-            use_gazebo=self.use_gazebo,
+            self.simulation_backend,
         )
-        self.namespaced_arm_controllers = bool(
-            self.get_parameter("namespaced_arm_controllers").value
-        )
+        self.namespaced_arm_controllers = self.simulation_backend in ("fake", "real")
         self.start_gripper = bool(self.get_parameter("start_gripper").value)
         self.home_grippers_before_execute = bool(
             self.get_parameter("home_grippers_before_execute").value

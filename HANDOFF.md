@@ -46,7 +46,7 @@ MTC 入口支持完整预检后执行缓存轨迹；可先用纯规划模式检�
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_gazebo:=true plan:=true execute:=false
+  simulation_backend:=gazebo plan:=true execute:=false
 ```
 
 默认在准备动作前搜索多组准备关节姿态，预检 preparation 和 formal 的完整路径。
@@ -237,7 +237,7 @@ Gazebo/单 controller manager:
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_fake_hardware:=false \
+  simulation_backend:=real \
   left_robot_ip:=192.168.1.2 \
   right_robot_ip:=192.168.2.2 \
   start_gripper:=true plan:=true execute:=true
@@ -269,7 +269,7 @@ Start state is out of bounds!
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_gazebo:=true plan:=true execute:=true leader_lead_distance:=0.10
+  simulation_backend:=gazebo plan:=true execute:=true leader_lead_distance:=0.10
 ```
 
 当时 MTC 已生成 solution，多个 controller goal 也成功到达；随后 MoveIt 因双臂
@@ -360,10 +360,10 @@ MTC 节点发布：
 
 MTC 日志中的 `stage_key` 由 task step、action、actor、起止点和 primitive 构成；同时会打印 actor、group、frame、vector、yaw、执行顺序。
 
-`trunking_readiness_gate.py` 根据 `use_gazebo` 选择控制器命名：
+`trunking_readiness_gate.py` 根据 `simulation_backend` 选择控制器命名：
 
-- `use_gazebo:=false`：等待真机/分命名空间控制器。
-- `use_gazebo:=true`：等待 Gazebo 根命名空间控制器。
+- `simulation_backend:=real` / `fake`：等待分命名空间控制器。
+- `simulation_backend:=gazebo` / `maniskill`：等待根命名空间控制器。
 
 它还会等待 `/move_action`、`/execute_task_solution`（执行时）、左右夹爪 Action、
 `/joint_states` 和两个 controller state。默认超时后关闭 launch，不会继续启动 MTC。
@@ -373,7 +373,7 @@ MTC 日志中的 `stage_key` 由 task step、action、actor、起止点和 primi
 `launch/mtc_prototype.launch.py` 的主要默认值：
 
 ```text
-use_gazebo=false, gazebo_effort=false, plan=true, execute=false
+simulation_backend=gazebo, gazebo_effort=false, plan=true, execute=false
 execute_stage_by_stage=true, start_gripper=true
 initial_leader_index=1, initial_follower_index=0
 leader_group=left_fr3_arm, follower_group=right_fr3_arm
@@ -409,7 +409,7 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 4. 检查 move_group 日志中 `Added FollowJointTrajectory controller for ...` 的名称，
    必须与第 3 步逐字一致。
 5. 在 RViz 中对左右臂分别 plan + execute，确认 Gazebo 模型和 `/joint_states` 都更新。
-6. 再运行 `mtc_prototype.launch.py use_gazebo:=true plan:=false execute:=false`，
+6. 再运行 `mtc_prototype.launch.py simulation_backend:=gazebo plan:=false execute:=false`，
    确认就绪门通过。
 7. 然后才恢复 MTC `plan:=true execute:=false` 和逐 stage 仿真。
 8. 仿真闭环恢复后，再处理真机夹爪上限和后续动作。
@@ -437,7 +437,7 @@ P0 验收条件：
 1. `gazebo.launch.py` 能稳定启动，五个 controller 为 active。
 2. MoveIt 配置的两个 controller 与 `ros2 action list` 完全一致。
 3. RViz 分别执行左右臂轨迹时 Gazebo 和 `/joint_states` 同步变化。
-4. `mtc_prototype.launch.py use_gazebo:=true` 的就绪门能够通过。
+4. `mtc_prototype.launch.py simulation_backend:=gazebo` 的就绪门能够通过。
 5. 真机 launch 的命名空间配置没有被回退或覆盖。
 
 2026-08-31 验证结果：五个 Gazebo controller 均为 active；MoveIt 加载

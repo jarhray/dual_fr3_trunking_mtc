@@ -48,11 +48,10 @@ MoveIt Task Constructor（MTC）Stage。
 ```text
 mtc_prototype.launch.py
 │
-├─ use_gazebo=false
-│  └─ include dual_fr3_moveit_config/launch/demo.launch.py
-│
-├─ use_gazebo=true
-│  └─ include dual_fr3_moveit_config/launch/gazebo.launch.py
+├─ include dual_fr3_moveit_config/launch/demo.launch.py
+│  ├─ simulation_backend=gazebo（默认） → gazebo.launch.py
+│  ├─ simulation_backend=maniskill → maniskill.launch.py（ManiSkill2 / SAPIEN 2）
+│  └─ simulation_backend=fake/real → mock/真实硬件控制器
 │
 ├─ start trunking_readiness_gate.py
 │  └─ TrunkingReadinessGate.run()
@@ -303,10 +302,10 @@ spec，两次闭合是 `GripperOperation` spec，最后一步是带两个 `MoveR
 夹爪后端由运行环境唯一决定：
 
 ```text
-use_gazebo=true         -> gazebo
-use_gazebo=false 且
-use_fake_hardware=true  -> fake
-其他                    -> franka
+simulation_backend=gazebo    -> gazebo（默认）
+simulation_backend=maniskill -> maniskill
+simulation_backend=fake      -> fake
+simulation_backend=real      -> franka
 ```
 
 ## 6. 配置模型
@@ -338,8 +337,7 @@ TrunkingDefaults
 当前关键默认值：
 
 ```text
-use_fake_hardware=true
-use_gazebo=false
+simulation_backend=gazebo
 gazebo_effort=false
 plan=true
 execute=false

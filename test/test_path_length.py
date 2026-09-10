@@ -18,6 +18,7 @@ from dual_fr3_trunking_mtc.mtc.cartesian_validation import (
     cartesian_path_cost,
     merged_cartesian_path_cost,
 )
+from dual_fr3_trunking_mtc.mtc.diagnostics import explain_cost_failure
 
 
 @pytest.fixture
@@ -109,6 +110,8 @@ def test_cartesian_gate_detects_excursion_between_nearby_tcp_waypoints(model, ca
     assert math.isinf(cost(solution))
     assert "line deviation 1.9999" in caplog.text
     assert "REJECTED" in caplog.text
+    assert "CARTESIAN_PATH_DEVIATION" in solution.comment
+    assert "cartesian_path_tolerance=0.005000 m" in solution.comment
     assert [solution.trajectory[i].joint_positions for i in range(2)] == before
 
 
@@ -143,7 +146,7 @@ def test_real_mtc_cartesian_gate_blocks_detours(model, angle, accepted, merged):
 
     rclcpp.init()
     try:
-        task = core.Task(introspection=False)
+        task = core.Task()
         task.setRobotModel(model)
         scene = PlanningScene(model)
         scene.current_state = make_trajectory(model, [0.0])[0]
@@ -167,6 +170,18 @@ def test_real_mtc_cartesian_gate_blocks_detours(model, angle, accepted, merged):
             task.add(move)
         assert bool(task.plan()) is accepted
         assert bool(task.solutions) is accepted
+        if not accepted:
+            failed_stage = task["merged"] if merged else task["move"]
+            spec = SimpleNamespace(
+                name=failed_stage.name, primitive="cartesian_translate", planner="CartesianPath",
+                mtc_stage_type="Merger" if merged else "MoveRelative", ik_frame="tcp",
+                children=[SimpleNamespace(ik_frame=link) for link in ("tcp", "peer_tcp")],
+            )
+            explain_cost_failure(
+                failed_stage.failures[0], spec, None,
+                SimpleNamespace(cartesian_path_tolerance=0.005),
+            )
+            assert "CARTESIAN_PATH_DEVIATION" in failed_stage.failures[0].comment
     finally:
         rclcpp.shutdown()
 
@@ -236,7 +251,7 @@ def test_real_mtc_callback_filters_solutions(model, angle, accepted, caplog):
     caplog.set_level(logging.INFO)
     rclcpp.init()
     try:
-        task = core.Task(introspection=False)
+        task = core.Task()
         task.setRobotModel(model)
         scene = PlanningScene(model)
         scene.current_state = make_trajectory(model, [0.0])[0]
@@ -257,6 +272,17 @@ def test_real_mtc_callback_filters_solutions(model, angle, accepted, caplog):
         else:
             assert not task["anchor"].solutions
             assert "REJECTED" in caplog.text
+            explain_cost_failure(
+                task["anchor"].failures[0],
+                SimpleNamespace(name="anchor", primitive="direct_move_to_next_anchor",
+                                to_index=0, ik_frame="tcp"),
+                SimpleNamespace(keypoints=[SimpleNamespace(
+                    frame_id="base", position=(math.cos(angle), math.sin(angle), 0.0),
+                )]),
+                SimpleNamespace(anchor_max_path_length_ratio=1.5),
+            )
+            assert "PATH_LENGTH_LIMIT: TCP path" in task["anchor"].failures[0].comment
+            assert "limit 3.000000 m" in task["anchor"].failures[0].comment
     finally:
         rclcpp.shutdown()
 

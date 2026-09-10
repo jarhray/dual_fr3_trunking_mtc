@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -11,19 +12,22 @@ from launch.actions import (
     LogInfo,
     RegisterEventHandler,
 )
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
+    EnvironmentVariable,
     LaunchConfiguration,
-    NotSubstitution,
+    PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from dual_fr3_moveit_config.moveit_resources import build_moveit_resources
-from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, launch_default
+from dual_fr3_trunking_mtc.runtime.config import (
+    DEFAULTS, SIMULATION_BACKENDS, launch_default,
+)
 
 
 def declare_argument(name, default, **kwargs):
@@ -38,9 +42,6 @@ def generate_launch_description():
     moveit_package = "dual_fr3_moveit_config"
     trunking_package = "dual_fr3_trunking_mtc"
 
-    use_fake_hardware = declare_argument(
-        "use_fake_hardware", DEFAULTS.use_fake_hardware
-    )
     fake_sensor_commands = declare_argument(
         "fake_sensor_commands", DEFAULTS.fake_sensor_commands
     )
@@ -50,7 +51,22 @@ def generate_launch_description():
     start_gripper = declare_argument("start_gripper", DEFAULTS.start_gripper)
     ee_id = declare_argument("ee_id", DEFAULTS.ee_id)
     use_rviz = declare_argument("use_rviz", DEFAULTS.use_rviz)
-    use_gazebo = declare_argument("use_gazebo", DEFAULTS.use_gazebo)
+    simulation_backend = declare_argument("simulation_backend", DEFAULTS.simulation_backend,
+        choices=SIMULATION_BACKENDS, description="Robot execution backend (default: gazebo)")
+    maniskill_python = declare_argument("maniskill_python", os.environ.get(
+        "MANISKILL_PYTHON", str(Path.cwd() / ".venv/bin/python")))
+    maniskill_viewer = declare_argument("maniskill_viewer", True)
+
+    backend = LaunchConfiguration("simulation_backend")
+    mock_hardware = PythonExpression(["'", backend, "' == 'fake'"])
+    use_sim_time = PythonExpression(["'", backend, "' in ('gazebo', 'maniskill')"])
+    hardware_condition = IfCondition(PythonExpression([
+        "'", backend, "' in ('fake', 'real')",
+    ]))
+    gazebo_condition = IfCondition(PythonExpression(["'", backend, "' == 'gazebo'"]))
+    maniskill_condition = IfCondition(PythonExpression([
+        "'", backend, "' == 'maniskill'",
+    ]))
     gz_args = declare_argument("gz_args", DEFAULTS.gz_args)
     gazebo_effort = declare_argument(
         "gazebo_effort", DEFAULTS.gazebo_effort
@@ -196,7 +212,7 @@ def generate_launch_description():
     hardware_resources = build_moveit_resources(
         "dual_fr3.urdf.xacro",
         {
-            "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
+            "use_fake_hardware": mock_hardware,
             "fake_sensor_commands": LaunchConfiguration("fake_sensor_commands"),
             "left_robot_ip": LaunchConfiguration("left_robot_ip"),
             "right_robot_ip": LaunchConfiguration("right_robot_ip"),
@@ -215,12 +231,18 @@ def generate_launch_description():
         },
     )
 
+    maniskill_resources = build_moveit_resources("dual_fr3.urdf.xacro", {
+        "load_left_ros2_control": "false", "load_right_ros2_control": "false",
+        "load_gripper": LaunchConfiguration("load_gripper"),
+        "ee_id": LaunchConfiguration("ee_id"),
+    })
+
     moveit_demo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(moveit_share, "launch", "demo.launch.py")
         ),
         launch_arguments={
-            "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
+            "simulation_backend": backend,
             "fake_sensor_commands": LaunchConfiguration("fake_sensor_commands"),
             "left_robot_ip": LaunchConfiguration("left_robot_ip"),
             "right_robot_ip": LaunchConfiguration("right_robot_ip"),
@@ -228,27 +250,10 @@ def generate_launch_description():
             "start_gripper": LaunchConfiguration("start_gripper"),
             "ee_id": LaunchConfiguration("ee_id"),
             "use_rviz": LaunchConfiguration("use_rviz"),
-            "trajectory_execution_duration_scaling": LaunchConfiguration(
-                "trajectory_execution_duration_scaling"
-            ),
-            "trajectory_execution_goal_margin": LaunchConfiguration(
-                "trajectory_execution_goal_margin"
-            ),
-            "capabilities": "move_group/ExecuteTaskSolutionCapability",
-        }.items(),
-        condition=UnlessCondition(LaunchConfiguration("use_gazebo")),
-    )
-
-    moveit_gazebo = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(moveit_share, "launch", "gazebo.launch.py")
-        ),
-        launch_arguments={
-            "load_gripper": LaunchConfiguration("load_gripper"),
-            "ee_id": LaunchConfiguration("ee_id"),
-            "use_rviz": LaunchConfiguration("use_rviz"),
             "gz_args": LaunchConfiguration("gz_args"),
             "gazebo_effort": LaunchConfiguration("gazebo_effort"),
+            "maniskill_python": LaunchConfiguration("maniskill_python"),
+            "maniskill_viewer": LaunchConfiguration("maniskill_viewer"),
             "trajectory_execution_duration_scaling": LaunchConfiguration(
                 "trajectory_execution_duration_scaling"
             ),
@@ -257,10 +262,11 @@ def generate_launch_description():
             ),
             "capabilities": "move_group/ExecuteTaskSolutionCapability",
         }.items(),
-        condition=IfCondition(LaunchConfiguration("use_gazebo")),
     )
 
     mtc_arguments = [
+        "--simulation-backend",
+        backend,
         "--keypoints-file",
         LaunchConfiguration("keypoints_file"),
         "--task-frame",
@@ -313,10 +319,6 @@ def generate_launch_description():
         LaunchConfiguration("preparation_leader_gripper_profile"),
         "--preparation-follower-gripper-profile",
         LaunchConfiguration("preparation_follower_gripper_profile"),
-        "--use-fake-hardware",
-        LaunchConfiguration("use_fake_hardware"),
-        "--use-gazebo",
-        LaunchConfiguration("use_gazebo"),
         "--plan",
         LaunchConfiguration("plan"),
         "--execute",
@@ -342,19 +344,27 @@ def generate_launch_description():
             executable="trunking_mtc_prototype.py",
             prefix="/usr/bin/python3",
             output="screen",
-            parameters=resources.as_parameters(),
+            additional_env={
+                "TRUNKING_LOG_COLOR": EnvironmentVariable(
+                    "TRUNKING_LOG_COLOR", default_value="always",
+                ),
+            },
+            parameters=resources.as_parameters() + [{
+                "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
+            }],
             arguments=mtc_arguments,
             condition=condition,
         )
 
     hardware_mtc_node = mtc_node(
         hardware_resources,
-        UnlessCondition(LaunchConfiguration("use_gazebo")),
+        hardware_condition,
     )
     gazebo_mtc_node = mtc_node(
         gazebo_resources,
-        IfCondition(LaunchConfiguration("use_gazebo")),
+        gazebo_condition,
     )
+    maniskill_mtc_node = mtc_node(maniskill_resources, maniskill_condition)
 
     readiness_node = Node(
         package=trunking_package,
@@ -363,18 +373,10 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
+                "simulation_backend": backend,
+                "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                 "execute": ParameterValue(
                     LaunchConfiguration("execute"), value_type=bool
-                ),
-                "use_fake_hardware": ParameterValue(
-                    LaunchConfiguration("use_fake_hardware"), value_type=bool
-                ),
-                "use_gazebo": ParameterValue(
-                    LaunchConfiguration("use_gazebo"), value_type=bool
-                ),
-                "namespaced_arm_controllers": ParameterValue(
-                    NotSubstitution(LaunchConfiguration("use_gazebo")),
-                    value_type=bool,
                 ),
                 "start_gripper": ParameterValue(
                     LaunchConfiguration("start_gripper"), value_type=bool
@@ -398,7 +400,7 @@ def generate_launch_description():
 
     def start_mtc_after_readiness(event, _context):
         if event.returncode == 0:
-            return [hardware_mtc_node, gazebo_mtc_node]
+            return [hardware_mtc_node, gazebo_mtc_node, maniskill_mtc_node]
         return [
             LogInfo(
                 msg=(
@@ -422,7 +424,6 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            use_fake_hardware,
             fake_sensor_commands,
             left_robot_ip,
             right_robot_ip,
@@ -430,7 +431,9 @@ def generate_launch_description():
             start_gripper,
             ee_id,
             use_rviz,
-            use_gazebo,
+            simulation_backend,
+            maniskill_python,
+            maniskill_viewer,
             gz_args,
             gazebo_effort,
             keypoints_file,
@@ -473,7 +476,6 @@ def generate_launch_description():
             grippers_homed,
             mtc_keep_alive_sec,
             moveit_demo,
-            moveit_gazebo,
             start_mtc_when_ready,
             readiness_node,
         ]

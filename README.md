@@ -1,5 +1,12 @@
 # dual_fr3_trunking_mtc
 
+后端统一通过 `simulation_backend` 选择，默认 `gazebo`；原 `use_gazebo`、
+`use_fake_hardware` 和 `auto` 兼容逻辑已移除。
+ManiSkill 后端使用 ManiSkill2 0.5.3 / SAPIEN 2.2.2，通过 `simulation_backend:=maniskill`
+启动，保留当前 MTC 规划与执行流程。工作区 `.venv` 的安装脚本同时编译配套 MPM/Warp。
+构建、运行和验证步骤见
+[ManiSkill 使用说明](../dual_fr3_moveit_config/docs/maniskill.md)。
+
 `dual_fr3_trunking_mtc` 是一个面向双臂 FR3 线槽走线任务的 Python 优先规划包。
 
 当前启动链、数据流、模块边界和扩展位置见
@@ -178,7 +185,7 @@ ros2 launch dual_fr3_trunking_mtc demo.launch.py \
 常用 launch 参数：
 
 - `keypoints_file`：关键点 YAML 路径
-- `use_fake_hardware`：是否使用 fake hardware，默认 `true`
+- `simulation_backend`：选择 `gazebo`、`maniskill`、`fake` 或 `real`，默认 `gazebo`
 - `fake_sensor_commands`：fake hardware 下是否启用 fake sensor commands，默认 `true`
 - `use_rviz`：是否启动 RViz，默认 `true`
 - `load_gripper`：是否加载 gripper，默认 `true`
@@ -199,7 +206,7 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_fake_hardware:=false \
+  simulation_backend:=real \
   left_robot_ip:=192.168.1.2 \
   right_robot_ip:=192.168.2.2 \
   start_gripper:=true \
@@ -209,7 +216,7 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 
 这个 launch 会同时启动：
 
-- 默认情况下：`dual_fr3_moveit_config/launch/demo.launch.py`
+- `dual_fr3_moveit_config/launch/demo.launch.py`，由 `simulation_backend` 选择后端（默认 Gazebo）
 - MTC 原型节点 `trunking_mtc_prototype.py`
 
 它的用途是验证“scheduler 的 TaskPlan 能否被映射成 MoveIt Task Constructor stage”。
@@ -230,10 +237,10 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
   `controller_state`、完整且新鲜的 14 个机械臂关节状态和 MoveGroup；全部通过后才启动
   MTC 节点，不再依赖固定启动延时
 - readiness 是一次性启动闸门，不参与 MTC 规划或后续 stage 调度。真机还等待
-  `/move`、`/grasp`，并在 `execute:=true` 时依次 Homing 两个夹爪；Gazebo/fake
+  `/move`、`/grasp`，并在 `execute:=true` 时依次 Homing 两个夹爪；Gazebo/ManiSkill/fake
   则等待各自唯一的 `GripperCommand` 接口。任一检查失败都不会启动 MTC
 - 启用 preparation 时，在准备动作开始前搜索不同准备关节姿态，并预检准备到正式任务结束的全部路径。找到成功解后，`execute:=true` 按阶段直接执行这份完整 solution；只有执行异常才从实际状态重规划未完成部分。含准备动作或夹爪操作时要求 `execute_stage_by_stage:=true`
-- 通过 `use_gazebo:=true` 可切换到 `dual_fr3_moveit_config/launch/gazebo.launch.py`
+- 通过 `simulation_backend:=gazebo` 可切换到 `dual_fr3_moveit_config/launch/gazebo.launch.py`
   ，让 RViz 直接跟随 Gazebo 里的实际运动显示
 
 当前手动规定的 action primitive 是：
@@ -277,8 +284,8 @@ dual_fr3_trunking_mtc/demo.launch.py
   -> start trunking_plan_node.py
 
 dual_fr3_trunking_mtc/mtc_prototype.launch.py
-  -> default include dual_fr3_moveit_config/launch/demo.launch.py
-  -> use_gazebo:=true 时 include dual_fr3_moveit_config/launch/gazebo.launch.py
+  -> include dual_fr3_moveit_config/launch/demo.launch.py
+     -> simulation_backend 选择 Gazebo（默认）、ManiSkill、fake 或真机
   -> start trunking_readiness_gate.py
   -> readiness checks passed 后 start trunking_mtc_prototype.py
 ```
@@ -291,9 +298,41 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 
 - 只想看关键点小球、路径线、调度文本：用 `demo.launch.py`
 - 想验证 MTC stage 是否生成、后续执行模块应该接什么接口：用 `mtc_prototype.launch.py`
-- 想在 MTC 原型阶段同时看 Gazebo 里的实际运动：用 `mtc_prototype.launch.py use_gazebo:=true`
+- 想在 MTC 原型阶段同时看 Gazebo 里的实际运动：用 `mtc_prototype.launch.py simulation_backend:=gazebo`
 - 当前阶段做“方案 B / MTC 原型”：优先用 `mtc_prototype.launch.py`
 - 上真实机械臂前：保持 `execute:=false`，先确认 stage sequence 和 MTC plan 结果
+
+规划失败时，会输出 `[planning-failure]` 阶段摘要：每个阶段包含编号、名称、
+准备/正式阶段、actor、规划组、规划器、关键点及目标坐标。状态含义：
+
+- `HAS_SOLUTION`：该阶段已有局部候选解，不代表整个任务成功或已执行。
+- `FAILED`：该阶段只有失败候选；后续行给出实际原因。
+- `NO_RESULT`：没有返回候选，可能受前序阶段或超时影响，尚不能判定该阶段失败。
+- `SKIPPED`：说明性阶段或不产生 MTC 运动的夹爪 hold 操作。
+
+失败摘要和路径校验拒绝信息显示为红色，重试提示显示为黄色。launch 默认启用颜色；
+单独运行脚本时自动根据终端判断。保存纯文本日志可在启动前设置
+`TRUNKING_LOG_COLOR=never` 或 `NO_COLOR=1`，强制彩色可设 `TRUNKING_LOG_COLOR=always`。
+这些设置控制本包 Python 日志，MoveIt/FCL 原生日志仍使用自己的格式。
+
+`PATH_LENGTH_LIMIT` 会同时给出实际 TCP 路径长度、允许长度和直线距离；
+`CARTESIAN_PATH_DEVIATION` 给出实际偏差及容差。这些原因也保存在 MTC solution comment
+中。`INVALID_MOTION_PLAN` 会检查保留下来的失败轨迹，输出发现的碰撞轨迹点和
+TCP 高度超限；旧版 MoveIt Python 无法读取碰撞对象名称时，通过相邻 FCL 原生日志输出。
+诊断只检查存储轨迹的采样点，最多 4096 点，不改变规划场景、轨迹或约束；
+未定位到原因时会明确提示查看原生日志，不将其解释为无碰撞。
+搜索超时或重试耗尽时，`[planning-summary]` 汇总各阶段在多少次尝试中出现过各类拒绝。
+同时按阶段顺序显示结果统计，范围为本次搜索中失败的完整任务规划尝试：
+
+- `with_result=A/B`：该阶段纳入统计的 B 次尝试中，有 A 次返回了候选结果。
+- `has_solution`：至少返回一个局部可行解的尝试次数，即使同时存在被拒绝的分支。
+- `failed_only`：只返回失败候选的尝试次数。
+- `no_result`：没有返回候选的尝试次数；可能受前序阶段或超时影响，不计作失败。
+- `skipped` / `unavailable`：无运动阶段或无法读取状态的次数，不计入 `with_result`。
+- `failed_only/with_result`：只在已有结果的尝试中计算失败比例；无结果时显示 `n/a`。
+
+不要用阶段的拒绝次数除以总尝试次数来比较规划难度：前面的失败会减少后续阶段被规划
+的机会。同一次尝试也可能产生多种拒绝原因，原因计数之和不一定等于失败尝试数。
 
 `mtc_prototype.launch.py` 常用参数：
 
@@ -343,7 +382,7 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 - `home_grippers_before_execute`：真机执行前是否自动依次 Homing 两个夹爪，默认 `true`
 - `grippers_homed`：关闭自动 Homing 时，由操作者显式确认两个夹爪已经手动 Homing；默认 `false`
 - `mtc_keep_alive_sec`：MTC 节点完成后继续保留 topic publisher 的时间，默认 `30.0`
-- `use_gazebo`：是否切换到 Gazebo 版本的 MoveIt 启动文件，默认 `false`
+- `simulation_backend`：统一选择执行后端，支持 `gazebo`、`maniskill`、`fake`、`real`，默认 `gazebo`
 - `gz_args`：传给 Gazebo 的参数，默认 `empty.sdf -r`
 - `gazebo_effort`：是否在 Gazebo URDF 中暴露 effort command interface，默认
   `false`；MoveGroup 和 MTC 节点共用该值
@@ -352,7 +391,7 @@ dual_fr3_trunking_mtc/mtc_prototype.launch.py
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_gazebo:=true \
+  simulation_backend:=gazebo \
   plan:=true \
   execute:=true \
   preparation_height:=0.15 \
@@ -366,8 +405,8 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 
 夹爪执行由 `dual_fr3_trunking_mtc/gripper.py` 统一封装。profile 中的 `width`
 始终表示两指总开口：真机 backend 对 `move`/`grasp` 分别调用 Franka 官方 Action；
-Gazebo 使用 `/gripper_cmd`；fake hardware 使用 `/gripper_action`。后端在启动时由
-`use_gazebo` 和 `use_fake_hardware` 唯一确定，不会因某个 Action Server 暂时离线而
+Gazebo/ManiSkill 使用 `/gripper_cmd`；fake hardware 使用 `/gripper_action`。后端在启动时由
+`simulation_backend` 唯一确定，不会因某个 Action Server 暂时离线而
 静默切换语义。profile 中的示例参数只用于初始联调，真机执行前必须按实际线径、
 线槽尺寸和安全夹持力完成标定。
 
@@ -464,7 +503,7 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_gazebo:=true \
+  simulation_backend:=gazebo \
   plan:=true \
   execute:=true \
   motion_velocity_scaling:=0.1 \
@@ -575,7 +614,7 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_fake_hardware:=true \
+  simulation_backend:=fake \
   fake_sensor_commands:=true \
   use_rviz:=true \
   plan:=true \

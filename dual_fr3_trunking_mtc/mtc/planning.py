@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 
 from ..runtime.config import DEFAULTS
+from .diagnostics import PlanningFailureHistory, log_planning_failure
 from .task_builder import create_mtc_task
 
 
@@ -63,6 +64,7 @@ def plan_with_retries(
     if attempts < 1:
         raise ValueError("planning_attempts must be >= 1")
     specs = tuple(specs)
+    history = PlanningFailureHistory()
     for attempt in range(1, attempts + 1):
         logger.info("planning attempt %d/%d", attempt, attempts)
         try:
@@ -85,5 +87,11 @@ def plan_with_retries(
             )
             return PlannedTask(task, solution, specs, preparation_joint_goals or {})
         logger.warning("planning attempt %d/%d produced no valid solution", attempt, attempts)
+        log_planning_failure(
+            task, specs, logger, task_plan=task_plan, args=args,
+            selected_stage_indices=selected_stage_indices,
+            recovery_pose_goals=recovery_pose_goals, history=history,
+        )
     logger.error("planning failed after %d attempts", attempts)
+    history.log_summary(logger)
     return None

@@ -7,6 +7,7 @@ import math
 import numpy as np
 
 from .path_length import LENGTH_EPSILON, sampled_tcp_positions
+from .diagnostics import append_failure_comment
 
 
 LOGGER = logging.getLogger(__name__)
@@ -64,13 +65,20 @@ def cartesian_path_cost(link_name, tolerance, stage_name, *, stationary=False):
                 previous = position
             accepted = max_deviation <= tolerance + LENGTH_EPSILON
             LOGGER.log(
-                logging.INFO if accepted else logging.WARNING,
+                logging.INFO if accepted else logging.ERROR,
                 "%s: Cartesian TCP %s deviation %.6f m; limit %.6f m: %s",
                 stage_name, "in-place" if stationary else "line", max_deviation,
                 tolerance, "accepted" if accepted else "REJECTED",
             )
+            if not accepted:
+                append_failure_comment(solution, (
+                    f"CARTESIAN_PATH_DEVIATION: {stage_name} TCP {link_name} "
+                    f"{'in-place' if stationary else 'line'} deviation {max_deviation:.6f} m "
+                    f"> cartesian_path_tolerance={tolerance:.6f} m"
+                ))
             return length if accepted else math.inf
         except Exception as exc:  # noqa: BLE001 - never propagate an unchecked path
+            append_failure_comment(solution, f"CARTESIAN_CHECK_ERROR: {stage_name}: {exc}")
             LOGGER.exception("%s: Cartesian TCP check failed: %s", stage_name, exc)
             return math.inf
 

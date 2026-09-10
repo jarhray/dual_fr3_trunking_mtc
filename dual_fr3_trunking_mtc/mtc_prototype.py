@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from ament_index_python.packages import get_package_share_directory
+from rclpy.utilities import remove_ros_args
 
 from .gripper import (
     GripperController,
@@ -15,6 +16,7 @@ from .gripper import (
     resolve_gripper_backend,
 )
 from .models import ORIENTATION_DIRECTIONS, TaskPlan
+from .runtime.console_logging import make_logger
 from .mtc.executor import execute_stage_by_stage
 from .mtc.cached_execution import execute_cached_solution
 from .mtc.cartesian_validation import validate_cartesian_settings
@@ -43,7 +45,7 @@ from .preparation import (
     confirm_stage,
     read_controlling_terminal,
 )
-from .runtime.config import DEFAULTS, parse_bool
+from .runtime.config import DEFAULTS, SIMULATION_BACKENDS, parse_bool
 from .runtime.stage_publisher import (
     shutdown_stage_sequence_publisher,
     spin_stage_sequence_publisher,
@@ -98,12 +100,7 @@ _shutdown_stage_sequence_publisher = shutdown_stage_sequence_publisher
 
 
 def _make_logger() -> logging.Logger:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[mtc_prototype] %(message)s",
-        stream=sys.stdout,
-    )
-    return logging.getLogger("dual_fr3_trunking_mtc.mtc_prototype")
+    return make_logger()
 
 
 def _default_keypoints_file() -> str:
@@ -242,17 +239,9 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
         "--preparation-follower-gripper-profile",
         default=DEFAULTS.preparation_follower_gripper_profile,
     )
-    parser.add_argument(
-        "--use-fake-hardware",
-        type=_parse_bool,
-        default=DEFAULTS.use_fake_hardware,
-    )
-    parser.add_argument(
-        "--use-gazebo",
-        type=_parse_bool,
-        default=DEFAULTS.use_gazebo,
-    )
     parser.add_argument("--plan", type=_parse_bool, default=DEFAULTS.plan)
+    parser.add_argument("--simulation-backend", default=DEFAULTS.simulation_backend,
+                        choices=SIMULATION_BACKENDS)
     parser.add_argument("--execute", type=_parse_bool, default=DEFAULTS.execute)
     parser.add_argument(
         "--planning-attempts",
@@ -286,7 +275,7 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
         type=float,
         default=DEFAULTS.keep_alive_sec,
     )
-    args, _unknown = parser.parse_known_args(list(argv))
+    args = parser.parse_args(remove_ros_args(args=[parser.prog, *argv])[1:])
     try:
         validate_cartesian_settings(args.cartesian_jump_threshold, args.cartesian_path_tolerance)
         validate_preparation_search_settings(args)
@@ -339,16 +328,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         gripper_profiles = GripperProfileRegistry.load(
             args.gripper_profiles_file
         )
-        gripper_backend = resolve_gripper_backend(
-            use_fake_hardware=args.use_fake_hardware,
-            use_gazebo=args.use_gazebo,
-        )
+        gripper_backend = resolve_gripper_backend(args.simulation_backend)
         logger.info(
             "gripper backend=%s, profiles=%s",
             gripper_backend,
             ", ".join(gripper_profiles.names()),
         )
         keypoints = load_keypoints(args.keypoints_file, fallback_frame=args.task_frame)
+        logger.info("keypoints_file=%s", Path(args.keypoints_file).expanduser().resolve())
+        for index, keypoint in enumerate(keypoints):
+            logger.info(
+                "keypoint[%d] %s position=%s m frame=%s in_slot=%s role=%s",
+                index, keypoint.name, keypoint.position, keypoint.frame_id,
+                keypoint.in_slot, keypoint.role,
+            )
         segments = build_segment_plans(
             keypoints,
             leader_orientation_direction=args.leader_orientation_direction,
@@ -408,6 +401,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             gripper_controller = GripperController(
                 gripper_profiles,
                 gripper_backend,
+                use_sim_time=gripper_backend in ("gazebo", "maniskill"),
             )
 
         logger.info(

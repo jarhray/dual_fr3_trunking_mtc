@@ -263,7 +263,7 @@ def test_main_prechecks_preparation_before_any_execution(
         NodeOptions=lambda **kwargs: None, Node=lambda *a: object(),
     )
     monkeypatch.setattr(mtc_prototype, "_import_mtc_modules", lambda: (rclcpp, None, None))
-    monkeypatch.setattr(mtc_prototype, "GripperController", lambda *a: NS(close=lambda: None))
+    monkeypatch.setattr(mtc_prototype, "GripperController", lambda *a, **kw: NS(close=lambda: None))
     monkeypatch.setattr(mtc_prototype, "_start_stage_sequence_publisher", lambda *a: None)
 
     def prepare(*_args, **_kwargs):

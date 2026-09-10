@@ -3,12 +3,15 @@ import pytest
 from dual_fr3_trunking_mtc.mtc.task_builder import DEFAULT_ANCHOR_MAX_PATH_Z
 from dual_fr3_trunking_mtc.mtc_prototype import _parse_args
 from dual_fr3_trunking_mtc.preparation import PreparationConfig
-from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, launch_default
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, launch_default, resolve_simulation_backend
 
 
 def test_cli_defaults_are_sourced_from_runtime_config():
     args = _parse_args([])
 
+    assert args.simulation_backend == DEFAULTS.simulation_backend == "gazebo"
+    assert not hasattr(args, "use_fake_hardware")
+    assert not hasattr(args, "use_gazebo")
     assert args.task_frame == DEFAULTS.task_frame
     assert args.initial_leader_index == DEFAULTS.initial_leader_index
     assert args.initial_follower_index == DEFAULTS.initial_follower_index
@@ -67,3 +70,30 @@ def test_launch_default_preserves_typed_values():
 
 def test_gazebo_resource_default_matches_moveit_launch():
     assert DEFAULTS.gazebo_effort is False
+
+
+@pytest.mark.parametrize("backend", ["gazebo", "maniskill", "fake", "real"])
+def test_backend_selection_is_explicit(backend):
+    assert resolve_simulation_backend(backend) == backend
+    assert _parse_args(["--simulation-backend", backend]).simulation_backend == backend
+
+
+@pytest.mark.parametrize("backend", ["auto", "missing", ""])
+def test_backend_selection_rejects_invalid_values(backend):
+    with pytest.raises(ValueError):
+        resolve_simulation_backend(backend)
+    with pytest.raises(SystemExit):
+        _parse_args(["--simulation-backend", backend])
+
+
+@pytest.mark.parametrize("option", ["--use-gazebo", "--use-fake-hardware"])
+def test_removed_cli_selectors_are_rejected(option):
+    with pytest.raises(SystemExit):
+        _parse_args([option, "false"])
+
+
+def test_cli_still_accepts_ros_arguments():
+    args = _parse_args([
+        "--simulation-backend", "maniskill", "--ros-args", "-p", "use_sim_time:=true",
+    ])
+    assert args.simulation_backend == "maniskill"
