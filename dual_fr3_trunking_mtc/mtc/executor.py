@@ -21,6 +21,7 @@ def execute_stage_by_stage(
     gripper_profiles: GripperProfileRegistry | None = None,
     confirmation_callback: Callable[[MtcStageSpec], bool] | None = None,
     task_factory: Callable = create_mtc_task,
+    cable_controller=None,
 ) -> bool:
     """Execute preparation/interactive stages with bounded planning retries."""
     executable_specs = [spec for spec in specs if spec.executable]
@@ -39,6 +40,16 @@ def execute_stage_by_stage(
                 return False
             if not confirmation_callback(spec):
                 return False
+
+        if getattr(spec, "mtc_stage_type", "") == "SimulationCable":
+            try:
+                if cable_controller is None or not cable_controller.execute(spec):
+                    logger.error("simulation cable insertion failed; stopping before descent")
+                    return False
+            except Exception:
+                logger.exception("simulation cable insertion raised; stopping before descent")
+                return False
+            continue
 
         if getattr(spec, "mtc_stage_type", "") == "GripperOperation":
             logger.info(

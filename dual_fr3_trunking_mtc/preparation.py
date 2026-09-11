@@ -20,6 +20,7 @@ LEADER_APPROACH = "leader_move_above_initial_keypoint"
 FOLLOWER_APPROACH = "follower_move_above_initial_keypoint"
 LEADER_CLOSE = "leader_close_gripper"
 FOLLOWER_CLOSE = "follower_close_gripper"
+INSERT_CABLE = "insert_simulation_cable"
 DUAL_DESCENT = "dual_cartesian_descent"
 TERMINAL_DEVICE = "/dev/tty"
 
@@ -44,6 +45,7 @@ class PreparationConfig:
     interactive: bool = DEFAULTS.preparation_interactive
     leader_gripper_profile: str = DEFAULTS.preparation_leader_gripper_profile
     follower_gripper_profile: str = DEFAULTS.preparation_follower_gripper_profile
+    simulation_cable_config: str = ""
 
 
 def _validate_config(
@@ -63,6 +65,12 @@ def _validate_config(
         raise ValueError("preparation approach_height must be finite and positive")
     validate_orientation_direction(config.leader_orientation_direction)
     validate_orientation_direction(config.follower_orientation_direction)
+    if config.simulation_cable_config and (
+        config.leader_group != "left_fr3_arm" or config.follower_group != "right_fr3_arm"
+        or config.leader_ik_frame != "left_fr3_hand_tcp"
+        or config.follower_ik_frame != "right_fr3_hand_tcp"
+    ):
+        raise ValueError("Simulation cable requires leader=left FR3 TCP and follower=right FR3 TCP")
 
 
 def _path_yaw(
@@ -107,6 +115,11 @@ def build_preparation_stage_specs(
     _validate_config(task_plan, config)
     keypoints = task_plan.keypoints
     height = config.approach_height
+    cable_widths = {}
+    if config.simulation_cable_config:
+        from dual_fr3_maniskill.cable.model import load_config
+        cable_widths = {"leader": 2*load_config(config.simulation_cable_config)["usb"]["finger_position"],
+                        "follower": 0.}
     actor_settings = {
         "leader": (
             task_plan.initial_leader_index,
@@ -184,11 +197,26 @@ def build_preparation_stage_specs(
                 mtc_stage_type="GripperOperation",
                 planner="GripperProfile",
                 gripper_profile=profile,
+                gripper_action="move" if config.simulation_cable_config else "",
+                gripper_width_override=cable_widths.get(actor),
                 phase="preparation",
                 confirmation_required=config.interactive,
                 info=f"close {actor} gripper",
             )
         )
+
+    if config.simulation_cable_config:
+        specs.append(MtcStageSpec(
+            step_index=len(specs), stage_index=start_stage_index + len(specs),
+            stage_key=f"preparation:dual:{INSERT_CABLE}", action="preparation",
+            actor="dual", group="", ik_frame=config.leader_ik_frame,
+            name=f"preparation_{INSERT_CABLE}", from_index=-1, to_index=-1,
+            from_keypoint="closed_grippers", to_keypoint="threaded_cable",
+            frame_id="world", vector=(0., 0., 0.), execution_order=[INSERT_CABLE],
+            primitive=INSERT_CABLE, mtc_stage_type="SimulationCable", planner="ModifyPlanningScene",
+            phase="preparation", cable_config=config.simulation_cable_config,
+            info="fix USB to left TCP and thread the cable through the sliding right TCP guide",
+        ))
 
     child_specs = []
     for actor in ("leader", "follower"):

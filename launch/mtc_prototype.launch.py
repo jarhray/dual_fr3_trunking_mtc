@@ -10,6 +10,7 @@ from launch.actions import (
     EmitEvent,
     IncludeLaunchDescription,
     LogInfo,
+    OpaqueFunction,
     RegisterEventHandler,
 )
 from launch.conditions import IfCondition
@@ -25,6 +26,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from dual_fr3_moveit_config.moveit_resources import build_moveit_resources
+from dual_fr3_moveit_config.maniskill_resources import build_maniskill_resources
 from dual_fr3_trunking_mtc.runtime.config import (
     DEFAULTS, SIMULATION_BACKENDS, launch_default,
 )
@@ -56,6 +58,12 @@ def generate_launch_description():
     maniskill_python = declare_argument("maniskill_python", os.environ.get(
         "MANISKILL_PYTHON", str(Path.cwd() / ".venv/bin/python")))
     maniskill_viewer = declare_argument("maniskill_viewer", True)
+    maniskill_cable = declare_argument("maniskill_cable", True,
+        description="Insert a held USB cable after both preparation gripper closures, only in ManiSkill")
+    cable_config = declare_argument("cable_config", "")
+    cable_scene = PythonExpression(["'trunking_cable' if '", LaunchConfiguration("simulation_backend"),
+        "' == 'maniskill' and '",
+        LaunchConfiguration("maniskill_cable"), "'.lower() in ('true', '1', 'yes', 'on') else 'robot'"])
 
     backend = LaunchConfiguration("simulation_backend")
     mock_hardware = PythonExpression(["'", backend, "' == 'fake'"])
@@ -173,13 +181,17 @@ def generate_launch_description():
         "preparation_follower_gripper_profile",
         DEFAULTS.preparation_follower_gripper_profile,
     )
-    trajectory_execution_duration_scaling = declare_argument(
+    trajectory_execution_duration_scaling = DeclareLaunchArgument(
         "trajectory_execution_duration_scaling",
-        DEFAULTS.trajectory_execution_duration_scaling,
+        default_value=PythonExpression(["'10.0' if '", backend, "' == 'maniskill' and '",
+            LaunchConfiguration("maniskill_cable"), "'.lower() in ('true', '1', 'yes', 'on') else '",
+            str(DEFAULTS.trajectory_execution_duration_scaling), "'"]),
     )
-    trajectory_execution_goal_margin = declare_argument(
+    trajectory_execution_goal_margin = DeclareLaunchArgument(
         "trajectory_execution_goal_margin",
-        DEFAULTS.trajectory_execution_goal_margin,
+        default_value=PythonExpression(["'5.0' if '", backend, "' == 'maniskill' and '",
+            LaunchConfiguration("maniskill_cable"), "'.lower() in ('true', '1', 'yes', 'on') else '",
+            str(DEFAULTS.trajectory_execution_goal_margin), "'"]),
     )
     plan = declare_argument("plan", DEFAULTS.plan)
     execute = declare_argument("execute", DEFAULTS.execute)
@@ -231,12 +243,6 @@ def generate_launch_description():
         },
     )
 
-    maniskill_resources = build_moveit_resources("dual_fr3.urdf.xacro", {
-        "load_left_ros2_control": "false", "load_right_ros2_control": "false",
-        "load_gripper": LaunchConfiguration("load_gripper"),
-        "ee_id": LaunchConfiguration("ee_id"),
-    })
-
     moveit_demo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(moveit_share, "launch", "demo.launch.py")
@@ -254,6 +260,8 @@ def generate_launch_description():
             "gazebo_effort": LaunchConfiguration("gazebo_effort"),
             "maniskill_python": LaunchConfiguration("maniskill_python"),
             "maniskill_viewer": LaunchConfiguration("maniskill_viewer"),
+            "maniskill_scene": cable_scene,
+            "cable_config": LaunchConfiguration("cable_config"),
             "trajectory_execution_duration_scaling": LaunchConfiguration(
                 "trajectory_execution_duration_scaling"
             ),
@@ -265,6 +273,8 @@ def generate_launch_description():
     )
 
     mtc_arguments = [
+        "--maniskill-cable", LaunchConfiguration("maniskill_cable"),
+        "--cable-config", LaunchConfiguration("cable_config"),
         "--simulation-backend",
         backend,
         "--keypoints-file",
@@ -364,7 +374,16 @@ def generate_launch_description():
         gazebo_resources,
         gazebo_condition,
     )
-    maniskill_mtc_node = mtc_node(maniskill_resources, maniskill_condition)
+    def make_maniskill_mtc(context):
+        resources = build_maniskill_resources(
+            scene=cable_scene.perform(context),
+            cable_config=LaunchConfiguration("cable_config").perform(context),
+            load_gripper=LaunchConfiguration("load_gripper").perform(context),
+            ee_id=LaunchConfiguration("ee_id").perform(context),
+        )
+        return [mtc_node(resources, None)]
+
+    maniskill_mtc_node = OpaqueFunction(function=make_maniskill_mtc, condition=maniskill_condition)
 
     readiness_node = Node(
         package=trunking_package,
@@ -434,6 +453,8 @@ def generate_launch_description():
             simulation_backend,
             maniskill_python,
             maniskill_viewer,
+            maniskill_cable,
+            cable_config,
             gz_args,
             gazebo_effort,
             keypoints_file,

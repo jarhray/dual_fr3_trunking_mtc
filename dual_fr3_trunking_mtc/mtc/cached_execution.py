@@ -48,7 +48,7 @@ def cache_selected_stages(planned):
     for spec in planned.specs:
         if not spec.executable:
             continue
-        if spec.mtc_stage_type == "GripperOperation":
+        if spec.mtc_stage_type in ("GripperOperation", "SimulationCable"):
             cached.append(CachedStage(spec, None))
             continue
         matches = []
@@ -88,6 +88,7 @@ def execute_cached_solution(
     planned, node, task_plan, args, logger, gripper_controller=None,
     gripper_profiles=None, confirmation_callback=None,
     planner=plan_with_retries,
+    cable_controller=None,
 ):
     """
     Execute exact cached trajectories, with bounded recovery after failure.
@@ -123,6 +124,15 @@ def execute_cached_solution(
                     return False
                 confirmed.add(spec.stage_index)
             logger.info("executing cached stage [%02d] %s", spec.stage_index, spec.name)
+            if spec.mtc_stage_type == "SimulationCable":
+                try:
+                    if cable_controller is None or not cable_controller.execute(spec):
+                        logger.error("simulation cable insertion failed; stopping before descent")
+                        return False
+                except Exception:
+                    logger.exception("simulation cable insertion raised; stopping before descent")
+                    return False
+                continue
             if spec.mtc_stage_type == "GripperOperation":
                 try:
                     succeeded = gripper_controller is not None and gripper_controller.execute(

@@ -207,6 +207,44 @@ def test_gripper_failure_does_not_continue_or_replan():
     assert not initial.task.executed
 
 
+@pytest.mark.parametrize("failed", ["left", "right", "cable", None])
+def test_cable_runs_only_after_both_closures_and_failure_prevents_descent(failed):
+    specs = [spec(0, "GripperOperation"), spec(1, "GripperOperation"),
+             spec(2, "SimulationCable"), spec(3)]
+    specs[0].actor, specs[1].actor = "left", "right"
+    initial = planned(specs)
+    events = []
+
+    def close(request):
+        events.append(request.actor)
+        return failed != request.actor
+
+    def insert(_spec):
+        events.append("cable")
+        return failed != "cable"
+
+    result = cached_execution.execute_cached_solution(
+        initial, None, None, args(), LOGGER, gripper_controller=NS(execute=close),
+        cable_controller=NS(execute=insert), planner=unexpected_plan,
+    )
+    assert result is (failed is None)
+    assert events == {"left": ["left"], "right": ["left", "right"]}.get(failed, ["left", "right", "cable"])
+    assert len(initial.task.executed) == int(failed is None)
+
+
+def test_descent_recovery_does_not_reinsert_cable():
+    specs = [spec(0, "SimulationCable"), spec(1)]
+    initial = planned(specs, [MoveItErrorCodes.CONTROL_FAILED])
+    replacement = planned(specs[1:], offset=100)
+    calls = []
+    assert cached_execution.execute_cached_solution(
+        initial, None, None, args(), LOGGER,
+        cable_controller=NS(execute=lambda spec: calls.append(spec) or True),
+        planner=lambda *a, **kw: replacement,
+    )
+    assert calls == [specs[0]]
+
+
 def test_planning_retries_preserve_first_success_and_stop(monkeypatch):
     solution = object()
     tasks = [NS(plan=lambda: False, solutions=[]), NS(plan=lambda: True, solutions=[solution])]

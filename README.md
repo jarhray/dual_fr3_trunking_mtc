@@ -7,6 +7,13 @@ ManiSkill 后端使用 ManiSkill2 0.5.3 / SAPIEN 2.2.2，通过 `simulation_back
 构建、运行和验证步骤见
 [ManiSkill 使用说明](../dual_fr3_moveit_config/docs/maniskill.md)。
 
+MTC 入口在 `simulation_backend:=maniskill` 时默认启用准备阶段线缆：两个夹爪
+闭合成功后固定左手 USB、穿过右 TCP 滑孔，再执行双臂下降。运行
+`ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py simulation_backend:=maniskill execute:=true`。
+使用 `maniskill_cable:=false` 可关闭；`execute:=false` 不创建仿真线缆。
+默认线径为适配现有研究手指孔的 2 mm，完整说明见
+[MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
+
 `dual_fr3_trunking_mtc` 是一个面向双臂 FR3 线槽走线任务的 Python 优先规划包。
 
 当前启动链、数据流、模块边界和扩展位置见

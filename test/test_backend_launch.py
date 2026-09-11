@@ -67,3 +67,20 @@ def test_moveit_launch_selects_exactly_one_backend(backend):
         source = selected[0].launch_description_source
         source.get_launch_description(context)
         assert source.location.endswith(f"/{backend}.launch.py")
+
+
+@pytest.mark.parametrize("backend,enabled,expected", [
+    ("maniskill", "true", "trunking_cable"), ("maniskill", "false", "robot"),
+    ("maniskill", "1", "trunking_cable"), ("fake", "true", "robot"),
+    ("real", "true", "robot"), ("gazebo", "true", "robot"),
+])
+def test_mtc_entry_selects_deferred_cable_only_for_maniskill(backend, enabled, expected):
+    from launch.utilities import perform_substitutions, normalize_to_list_of_substitutions
+    description = load_launch("dual_fr3_trunking_mtc", "mtc_prototype.launch.py")
+    context = LaunchContext()
+    context.launch_configurations.update(simulation_backend=backend, maniskill_cable=enabled)
+    apply_arguments(description, context)
+    include, = [a for a in description.entities if isinstance(a, IncludeLaunchDescription)]
+    arguments = dict(include.launch_arguments)
+    selected = perform_substitutions(context, normalize_to_list_of_substitutions(arguments["maniskill_scene"]))
+    assert selected == expected

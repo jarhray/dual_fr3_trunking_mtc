@@ -242,6 +242,9 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--plan", type=_parse_bool, default=DEFAULTS.plan)
     parser.add_argument("--simulation-backend", default=DEFAULTS.simulation_backend,
                         choices=SIMULATION_BACKENDS)
+    parser.add_argument("--maniskill-cable", type=_parse_bool, default=True,
+                        help="insert cable after preparation, only with the maniskill backend")
+    parser.add_argument("--cable-config", default="")
     parser.add_argument("--execute", type=_parse_bool, default=DEFAULTS.execute)
     parser.add_argument(
         "--planning-attempts",
@@ -297,6 +300,7 @@ def _execute_stage_by_stage(
     gripper_controller: GripperController | None = None,
     gripper_profiles: GripperProfileRegistry | None = None,
     confirmation_callback=None,
+    cable_controller=None,
 ) -> bool:
     """Compatibility wrapper that keeps create_mtc_task monkeypatchable here."""
     return execute_stage_by_stage(
@@ -309,6 +313,7 @@ def _execute_stage_by_stage(
         gripper_profiles=gripper_profiles,
         confirmation_callback=confirmation_callback,
         task_factory=create_mtc_task,
+        cable_controller=cable_controller,
     )
 
 
@@ -324,7 +329,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     node = rclcpp.Node("dual_fr3_trunking_mtc_prototype", node_options)
     stage_publisher = None
     gripper_controller = None
+    cable_controller = None
     try:
+        from .simulation_cable import preparation_cable_config, SimulationCableController
+        cable_config = preparation_cable_config(args.simulation_backend, args.maniskill_cable,
+                                                args.preparation_enabled, args.cable_config)
         gripper_profiles = GripperProfileRegistry.load(
             args.gripper_profiles_file
         )
@@ -363,6 +372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             interactive=args.preparation_interactive,
             leader_gripper_profile=args.preparation_leader_gripper_profile,
             follower_gripper_profile=args.preparation_follower_gripper_profile,
+            simulation_cable_config=cable_config,
         )
         # Validate preparation profile names even in planning-only mode.
         gripper_profiles.get(preparation_config.leader_gripper_profile)
@@ -403,6 +413,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 gripper_backend,
                 use_sim_time=gripper_backend in ("gazebo", "maniskill"),
             )
+        if args.execute and cable_config:
+            cable_controller = SimulationCableController(backend=args.simulation_backend)
 
         logger.info(
             "loaded %d keypoints, %d segments, %d task steps, "
@@ -442,6 +454,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not execute_cached_solution(
                     planned, node, task_plan, args, logger,
                     gripper_controller=gripper_controller,
+                    cable_controller=cable_controller,
                     gripper_profiles=gripper_profiles,
                     confirmation_callback=lambda spec: confirm_stage(
                         spec, read_controlling_terminal, logger,
@@ -480,6 +493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     finally:
         _shutdown_stage_sequence_publisher(stage_publisher)
+        if cable_controller is not None:
+            cable_controller.close()
         if gripper_controller is not None:
             gripper_controller.close()
         rclcpp.shutdown()

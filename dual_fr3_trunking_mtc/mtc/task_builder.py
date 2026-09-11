@@ -254,6 +254,17 @@ def create_mtc_task(
         if not spec.executable:
             continue
 
+        if spec.mtc_stage_type == "SimulationCable":
+            from dual_fr3_maniskill.cable.planning_scene import usb_collision_object
+            from dual_fr3_maniskill.cable.threading import LEFT_TCP, TOUCH_LINKS
+            obj = usb_collision_object(spec.cable_config)
+            attach = stages.ModifyPlanningScene(spec.name)
+            attach.addObject(obj)
+            attach.attachObject(obj.id, LEFT_TCP)
+            attach.allowCollisions(obj.id, list(TOUCH_LINKS), True)
+            task.add(attach)
+            continue
+
         if spec.mtc_stage_type == "Merger":
             merger = core.Merger(spec.name)
             merger.setCostTerm(merged_cartesian_path_cost(
