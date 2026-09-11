@@ -129,6 +129,9 @@ def test_shared_task_builder_materializes_preparation_specs(monkeypatch):
         def setDirection(self, direction):
             self.direction = direction
 
+        def setCostTerm(self, cost):
+            self.cost = cost
+
     class Merger(Stage):
         def __init__(self, name):
             super().__init__(name)

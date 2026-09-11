@@ -48,11 +48,10 @@ MoveIt Task Constructor（MTC）Stage。
 ```text
 mtc_prototype.launch.py
 │
-├─ use_gazebo=false
-│  └─ include dual_fr3_moveit_config/launch/demo.launch.py
-│
-├─ use_gazebo=true
-│  └─ include dual_fr3_moveit_config/launch/gazebo.launch.py
+├─ include dual_fr3_moveit_config/launch/demo.launch.py
+│  ├─ simulation_backend=gazebo（默认） → gazebo.launch.py
+│  ├─ simulation_backend=maniskill → maniskill.launch.py（ManiSkill2 / SAPIEN 2）
+│  └─ simulation_backend=fake/real → mock/真实硬件控制器
 │
 ├─ start trunking_readiness_gate.py
 │  └─ TrunkingReadinessGate.run()
@@ -131,6 +130,10 @@ stages.compiler.build_mtc_stage_specs(task_plan, preparation_config)
         ├──────────────► JSON / text stage sequence
         │
         ▼
+mtc.preparation_search（启用 preparation 时）
+  同一场景 → 多初值 IK 去重 → 候选组合 → 全程预检
+        │
+        ▼
 mtc.task_builder.create_mtc_task()
         │
         ▼
@@ -138,7 +141,7 @@ MoveIt Task Constructor Task
         │
         ├─ task.plan()
         ├─ task.execute()                  整体执行
-        └─ mtc.executor                    逐 Stage 重新规划和执行
+        └─ mtc.cached_execution            执行选定解，异常时恢复未完成阶段
 ```
 
 这是单向的数据依赖：段动作只在 planner 中分类一次；scheduler 只消费已经分类的
@@ -173,8 +176,8 @@ stage_specs = build_mtc_stage_specs(
 `TaskPlan.steps` 的列表副本。新代码应使用 `build_task_plan()`，避免再次把统一规划对象拆散。
 
 准备阶段由 `preparation.py` 编译为同一种 `MtcStageSpec`。它和正式 Stage 共用
-`mtc/task_builder.py` 与 `mtc/executor.py`；执行时仅通过 `phase` 划分准备和正式任务，以保证
-准备完成后再从最新机器人状态规划正式部分。
+`mtc/task_builder.py`；`mtc/preparation_search.py` 在任何准备 Stage 执行前搜索准备关节配置，
+将 preparation 和 formal 作为同一条完整任务预检并保留成功解。
 
 ## 5. 分层和模块职责
 
@@ -235,7 +238,12 @@ Stage 编译层只决定动作语义，不持有 MTC Task 生命周期。除 gro
 | 文件 | 主要职责 |
 |---|---|
 | `mtc/task_builder.py` | 消费统一 StageSpec，创建 planner、路径约束和 MTC Task |
-| `mtc/executor.py` | 从最新机器人状态逐个规划和执行 preparation/formal Stage |
+| `mtc/executor.py` | 保留的逐阶段诊断执行器，主入口不再用它先执行准备动作 |
+| `mtc/preparation_search.py` | 捕获场景、多初值 IK 去重、对角遍历双臂候选，用固定准备关节目标预检全程；保留原模型加载器生命周期 |
+| `mtc/planning.py` | 从 CurrentState 有限次完整规划，保留第一份成功解 |
+| `mtc/cached_execution.py` | 按 MTC solution ID 提取同一成功解的阶段，执行原轨迹并恢复失败后的未完成部分 |
+| `mtc/path_length.py` | 通过 FK 插值检查锚点 TCP 路程比例上限 |
+| `mtc/cartesian_validation.py` | 检查时间参数化后的直线 TCP 偏差和原地转向位置漂移，包含 Merger 最终轨迹 |
 
 当前 planner 映射：
 
@@ -249,7 +257,10 @@ Stage 编译层只决定动作语义，不持有 MTC Task 生命周期。除 gro
 | 双臂同步下降 | `Merger[MoveRelative x 2]` | `CartesianPath` |
 | 物理卡线占位 | `InfoOnly` | 不执行 |
 
-`direct_move_to_next_anchor` 还会增加 TCP 最大 z 路径约束。
+`direct_move_to_next_anchor` 增加 TCP 最大 z 路径约束和默认 1.5 倍直线距离的路程上限。
+`CartesianPath` 启用 `cartesian_jump_threshold=2.0`，要求 `min_fraction=1.0`；
+候选还必须通过默认 `cartesian_path_tolerance=0.01 m` 的密集 FK 位置检查。
+检查失败返回无限 cost，禁止传播到完整成功解；正常规划与恢复规划共用检查。
 
 ### 5.4 运行时层
 
@@ -291,10 +302,10 @@ spec，两次闭合是 `GripperOperation` spec，最后一步是带两个 `MoveR
 夹爪后端由运行环境唯一决定：
 
 ```text
-use_gazebo=true         -> gazebo
-use_gazebo=false 且
-use_fake_hardware=true  -> fake
-其他                    -> franka
+simulation_backend=gazebo    -> gazebo（默认）
+simulation_backend=maniskill -> maniskill
+simulation_backend=fake      -> fake
+simulation_backend=real      -> franka
 ```
 
 ## 6. 配置模型
@@ -326,15 +337,14 @@ TrunkingDefaults
 当前关键默认值：
 
 ```text
-use_fake_hardware=true
-use_gazebo=false
+simulation_backend=gazebo
 gazebo_effort=false
 plan=true
 execute=false
 execute_stage_by_stage=true
 preparation_enabled=true
 preparation_height=0.05
-anchor_max_path_z=0.4
+anchor_max_path_z=0.6
 leader_lead_distance=0.10
 preparation_leader_gripper_profile=cable_tip
 preparation_follower_gripper_profile=cable_tip
@@ -346,15 +356,21 @@ mtc_keep_alive_sec=30.0
 | `plan` | `execute` | `execute_stage_by_stage` | 行为 |
 |---|---|---|---|
 | false | false | 任意 | 只构造 Task 和 StageSpec，不调用规划 |
-| true | false | 任意 | 规划整体 Task，并可发布第一条 solution |
-| true | true | true | 通用 executor 先执行 preparation phase，再逐个执行 formal phase |
-| true | true | false | 一次性执行整体 solution，属于旧的高耦合执行方式 |
+| true | false | 任意 | 含 preparation 时搜索准备姿态并预检全程，否则有限次完整规划；可发布成功解 |
+| true | true | true | 先预检全程，再按阶段直接执行同一成功解，异常时重规划剩余部分 |
+| true | true | false | 仅限无 preparation 且无夹爪 Stage，一次性执行成功解，失败后停止 |
 
 逐 Stage 模式的关键性质：
 
-- 每个 Stage 使用新的 `CurrentState`。
-- 前一个 Stage 完成后再创建和规划下一个 Task。
-- 任一规划失败、执行失败或异常都会立即停止后续 Stage。
+- preparation 启用时，每臂最多 `preparation_ik_attempts=80` 个 IK 初值，保留 `preparation_ik_candidates=8` 个不同关节配置。TCP 目标不变，关节去重距离默认 `0.3 rad`。
+- 候选组合按对角顺序遍历，最多 `preparation_candidate_attempts=2` 轮。只有 PipelinePlanner 阶段失败时，每组最多 `planning_attempts=10` 次完整预检；Cartesian 失败换下一组。搜索预算 `preparation_search_timeout=180` 秒在原生求解调用之间检查，可能被当前调用超出。
+- 全部候选基于同一捕获场景的 FixedState 副本。准备 MoveTo 使用选中的关节目标，完整解通过所有现有约束后才开始执行。无成功解则不执行准备 Stage。
+- 关闭 preparation 或恢复未完成后缀时，使用 `planning_attempts=10` 次规划上限。找到成功解后保留原 Task 和 solution。
+- 通过完整解中的 solution ID 选择各阶段，不能独立选各阶段最便宜的解，否则可能不连接。
+- 正常执行不再创建和规划新的 Task。
+- 可恢复的终止错误触发最多 `execution_replan_attempts=2` 次恢复，每次从 CurrentState 规划未完成部分。
+- 相对运动恢复使用首次成功解中的绝对终点；准备动作恢复保持原选中关节目标；约束不放宽。
+- 取消、未知执行状态、夹爪失败和耗尽重试预算会停止。准备动作也适用同一异常恢复规则，已确认的阶段无需重复确认。
 - 夹爪 Stage 直接通过选定后端发送 Action，不通过机械臂规划器执行。
 
 ## 8. ROS 接口

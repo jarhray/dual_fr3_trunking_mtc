@@ -6,16 +6,18 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
-from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, launch_default
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, SIMULATION_BACKENDS, launch_default
 
 
 def generate_launch_description():
-    use_fake_hardware = DeclareLaunchArgument(
-        "use_fake_hardware",
-        default_value=launch_default(DEFAULTS.use_fake_hardware),
+    simulation_backend = DeclareLaunchArgument(
+        "simulation_backend",
+        default_value=DEFAULTS.simulation_backend,
+        choices=SIMULATION_BACKENDS,
     )
     fake_sensor_commands = DeclareLaunchArgument(
         "fake_sensor_commands",
@@ -87,7 +89,7 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
+            "simulation_backend": LaunchConfiguration("simulation_backend"),
             "fake_sensor_commands": LaunchConfiguration("fake_sensor_commands"),
             "left_robot_ip": LaunchConfiguration("left_robot_ip"),
             "right_robot_ip": LaunchConfiguration("right_robot_ip"),
@@ -105,6 +107,9 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
+                "use_sim_time": ParameterValue(PythonExpression([
+                    "'", LaunchConfiguration("simulation_backend"), "' in ('gazebo', 'maniskill')",
+                ]), value_type=bool),
                 "keypoints_file": LaunchConfiguration("keypoints_file"),
                 "task_frame": LaunchConfiguration("task_frame"),
                 "leader_orientation_direction": LaunchConfiguration(
@@ -123,7 +128,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            use_fake_hardware,
+            simulation_backend,
             fake_sensor_commands,
             left_robot_ip,
             right_robot_ip,

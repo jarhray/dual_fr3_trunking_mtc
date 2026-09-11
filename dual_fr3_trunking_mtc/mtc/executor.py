@@ -8,6 +8,7 @@ from ..gripper import GripperController, GripperProfileRegistry, GripperRequest
 from ..models import TaskPlan
 from ..stages.specs import MtcStageSpec
 from .task_builder import create_mtc_task
+from .planning import plan_with_retries
 
 
 def execute_stage_by_stage(
@@ -20,11 +21,12 @@ def execute_stage_by_stage(
     gripper_profiles: GripperProfileRegistry | None = None,
     confirmation_callback: Callable[[MtcStageSpec], bool] | None = None,
     task_factory: Callable = create_mtc_task,
+    cable_controller=None,
 ) -> bool:
-    """Plan and execute each executable spec from a fresh robot state."""
+    """Execute preparation/interactive stages with bounded planning retries."""
     executable_specs = [spec for spec in specs if spec.executable]
     logger.info(
-        "executing %d MTC stages with real-state replan between stages",
+        "executing %d preparation/interactive stages with planning retries",
         len(executable_specs),
     )
     for ordinal, spec in enumerate(executable_specs, start=1):
@@ -38,6 +40,16 @@ def execute_stage_by_stage(
                 return False
             if not confirmation_callback(spec):
                 return False
+
+        if getattr(spec, "mtc_stage_type", "") == "SimulationCable":
+            try:
+                if cable_controller is None or not cable_controller.execute(spec):
+                    logger.error("simulation cable insertion failed; stopping before descent")
+                    return False
+            except Exception:
+                logger.exception("simulation cable insertion raised; stopping before descent")
+                return False
+            continue
 
         if getattr(spec, "mtc_stage_type", "") == "GripperOperation":
             logger.info(
@@ -84,36 +96,13 @@ def execute_stage_by_stage(
             spec.stage_index,
             spec.name,
         )
-        try:
-            stage_task, _ = task_factory(
-                node,
-                task_plan,
-                specs,
-                leader_group=args.leader_group,
-                follower_group=args.follower_group,
-                leader_ik_frame=args.leader_ik_frame,
-                follower_ik_frame=args.follower_ik_frame,
-                cartesian_step_size=args.cartesian_step_size,
-                motion_velocity_scaling=args.motion_velocity_scaling,
-                motion_acceleration_scaling=args.motion_acceleration_scaling,
-                leader_lead_distance=args.leader_lead_distance,
-                tool_roll=args.tool_roll,
-                tool_pitch=args.tool_pitch,
-                selected_stage_indices={spec.stage_index},
-                leader_orientation_direction=args.leader_orientation_direction,
-                follower_orientation_direction=args.follower_orientation_direction,
-                anchor_max_path_z=args.anchor_max_path_z,
-                gripper_profiles=gripper_profiles,
-            )
-            plan_succeeded = stage_task.plan()
-        except Exception:  # noqa: BLE001 - execution must fail closed
-            logger.exception(
-                "stage [%02d] raised while planning; halting all later stages",
-                spec.stage_index,
-            )
-            return False
-
-        if not plan_succeeded or not stage_task.solutions:
+        planned = plan_with_retries(
+            node, task_plan, specs, args, logger,
+            gripper_profiles=gripper_profiles,
+            selected_stage_indices={spec.stage_index},
+            task_factory=task_factory,
+        )
+        if planned is None:
             logger.error(
                 "planning failed for stage [%02d] %s; halting all later stages",
                 spec.stage_index,
@@ -121,7 +110,7 @@ def execute_stage_by_stage(
             )
             return False
         try:
-            result = stage_task.execute(stage_task.solutions[0])
+            result = planned.task.execute(planned.solution)
         except Exception:  # noqa: BLE001 - execution must fail closed
             logger.exception(
                 "stage [%02d] raised while executing; halting all later stages",

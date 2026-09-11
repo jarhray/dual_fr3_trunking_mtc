@@ -34,6 +34,7 @@ class MtcStageSpec:
     gripper_profile: str = ""
     gripper_action: str = ""
     gripper_width_override: float | None = None
+    cable_config: str = ""
     phase: str = "formal"
     confirmation_required: bool = False
     children: tuple[MtcStageSpec, ...] = ()
@@ -63,6 +64,7 @@ def mtc_stage_spec_to_dict(spec: MtcStageSpec) -> Dict[str, Any]:
         "gripper_profile": spec.gripper_profile,
         "gripper_action": spec.gripper_action,
         "gripper_width_override": spec.gripper_width_override,
+        "cable_config": spec.cable_config,
         "phase": spec.phase,
         "confirmation_required": spec.confirmation_required,
         "children": [mtc_stage_spec_to_dict(child) for child in spec.children],

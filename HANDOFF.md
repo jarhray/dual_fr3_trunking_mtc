@@ -42,14 +42,26 @@ ros2 run dual_fr3_trunking_mtc trunking_step_by_step.py
 
 逐动作脚本、逐 stage 诊断器和 MTC 入口的 leader 默认让位距离统一为 `0.10` m。逐动作脚本也支持通过 `--leader-lead-distance` 覆盖。
 
-MTC 入口适合看 stage 顺序和整体规划，不应当作为当前可靠的完整执行器：
+MTC 入口支持完整预检后执行缓存轨迹；可先用纯规划模式检查候选和 stage 顺序：
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_gazebo:=true plan:=true execute:=false
+  simulation_backend:=gazebo plan:=true execute:=false
 ```
 
-`execute:=true` 默认按 executable stage 逐段重新规划和执行，每段完成后由 `CurrentState` 读取真实机器人状态。这样可以避免把整条理想化轨迹一次性交给 `move_group`，降低双臂中间姿态碰撞和状态漂移导致的失败。若需复现旧行为，可显式设置 `execute_stage_by_stage:=false`；`planning succeeded` 仍只代表生成了 solution，不代表整条轨迹已经安全执行。
+默认在准备动作前搜索多组准备关节姿态，预检 preparation 和 formal 的完整路径。
+同一准备 TCP 位姿使用多初值 IK，每臂最多 8 个去重候选、80 次 IK 初值，
+双臂组合对角遍历最多 2 轮，搜索时间预算 180 秒（原生调用间检查，可能超出）。
+OMPL 随机规划失败时，对当前组合最多重试 `planning_attempts=10` 次；后续 Cartesian
+失败则换下一组。相对关节跳变阈值已从 1.5 调为 2.0，实际模型回归复现了旧阈值
+在连续直线约 90% 处的截断；TCP 偏差检查和完整路径要求仍启用。
+任一完整解成功才允许执行准备 Stage；所有候选失败则不运动，原 readiness Homing 不变。
+成功后按阶段执行同一份完整解中的原轨迹，不再无条件逐阶段重新规划。
+可恢复的终止执行错误触发最多 `execution_replan_attempts=2` 次剩余任务重规划，
+起点使用 CurrentState，已完成的动作不重放；相对运动使用原成功解保存的绝对 TCP 终点。
+准备阶段恢复保持选中的关节目标，不重新随机求 IK。关闭 preparation 和异常恢复的规划
+使用 `planning_attempts=10` 上限。仅无准备、无夹爪 Stage 时允许
+`execute_stage_by_stage:=false` 发送一次完整执行 Action，失败后因阶段进度未知而停止。
 
 MTC 启动入口已经增加 fail-closed 就绪门：
 
@@ -60,7 +72,7 @@ MTC 启动入口已经增加 fail-closed 就绪门：
 - `execute:=true` 时等待 `/execute_task_solution` 和夹爪 Action。
 - 真机默认依次 Homing 两个夹爪；任一失败都不启动 MTC。
 - 已删除固定 `TimerAction(6s)`，只在就绪进程以返回码 0 退出后启动 MTC。
-- 任一 stage 规划失败、执行失败或抛出异常，立即终止所有后续 stage。
+- 规划失败按预算重试；明确的运动执行失败可恢复未完成阶段。取消、通信/未知异常、夹爪失败和耗尽重试预算时停止。
 
 ## 3. 数据流和主要文件
 
@@ -146,9 +158,9 @@ entry_5  [0.364, -0.070, 0.150]  out of slot
 5. 等待键盘确认，通过 MTC `Merger` 让双臂 TCP 沿 Cartesian 直线同步向下
    `0.05 m`。
 
-`execute:=true` 时通用 executor 按 `phase` 先逐步从最新机器人状态执行这五步，
-准备完成后再规划 formal phase。`execute:=false` 时两个 phase 会组合成
-一条 MTC 任务用于 RViz 预览。JSON/text stage sequence 版本为 2，其中
+`mtc/preparation_search.py` 在执行前将这五步和 formal phase 作为完整 MTC 任务预检，
+选中准备关节配置后保存整份成功解；`execute:=true` 从其中提取相连的 Stage 子轨迹直接执行，
+`execute:=false` 仅用于 RViz 预览。JSON/text stage sequence 版本为 2，其中
 包含 `phase`、`confirmation_required` 和递归 `children`。
 
 后续调度规则是：当 follower 的下一段属于 `straighten` 且 leader 已在前方时，先让 leader 跳到下一个 anchor，再由 follower 追赶拉直；`seat_edge` 则先执行 leader 让位和 follower 卡线。当前是运动学近似，不包含下压、接触检测、力控、视觉或线缆张力反馈。
@@ -225,7 +237,7 @@ Gazebo/单 controller manager:
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_fake_hardware:=false \
+  simulation_backend:=real \
   left_robot_ip:=192.168.1.2 \
   right_robot_ip:=192.168.2.2 \
   start_gripper:=true plan:=true execute:=true
@@ -257,7 +269,7 @@ Start state is out of bounds!
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  use_gazebo:=true plan:=true execute:=true leader_lead_distance:=0.10
+  simulation_backend:=gazebo plan:=true execute:=true leader_lead_distance:=0.10
 ```
 
 当时 MTC 已生成 solution，多个 controller goal 也成功到达；随后 MoveIt 因双臂
@@ -348,10 +360,10 @@ MTC 节点发布：
 
 MTC 日志中的 `stage_key` 由 task step、action、actor、起止点和 primitive 构成；同时会打印 actor、group、frame、vector、yaw、执行顺序。
 
-`trunking_readiness_gate.py` 根据 `use_gazebo` 选择控制器命名：
+`trunking_readiness_gate.py` 根据 `simulation_backend` 选择控制器命名：
 
-- `use_gazebo:=false`：等待真机/分命名空间控制器。
-- `use_gazebo:=true`：等待 Gazebo 根命名空间控制器。
+- `simulation_backend:=real` / `fake`：等待分命名空间控制器。
+- `simulation_backend:=gazebo` / `maniskill`：等待根命名空间控制器。
 
 它还会等待 `/move_action`、`/execute_task_solution`（执行时）、左右夹爪 Action、
 `/joint_states` 和两个 controller state。默认超时后关闭 launch，不会继续启动 MTC。
@@ -361,7 +373,7 @@ MTC 日志中的 `stage_key` 由 task step、action、actor、起止点和 primi
 `launch/mtc_prototype.launch.py` 的主要默认值：
 
 ```text
-use_gazebo=false, gazebo_effort=false, plan=true, execute=false
+simulation_backend=gazebo, gazebo_effort=false, plan=true, execute=false
 execute_stage_by_stage=true, start_gripper=true
 initial_leader_index=1, initial_follower_index=0
 leader_group=left_fr3_arm, follower_group=right_fr3_arm
@@ -397,7 +409,7 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 4. 检查 move_group 日志中 `Added FollowJointTrajectory controller for ...` 的名称，
    必须与第 3 步逐字一致。
 5. 在 RViz 中对左右臂分别 plan + execute，确认 Gazebo 模型和 `/joint_states` 都更新。
-6. 再运行 `mtc_prototype.launch.py use_gazebo:=true plan:=false execute:=false`，
+6. 再运行 `mtc_prototype.launch.py simulation_backend:=gazebo plan:=false execute:=false`，
    确认就绪门通过。
 7. 然后才恢复 MTC `plan:=true execute:=false` 和逐 stage 仿真。
 8. 仿真闭环恢复后，再处理真机夹爪上限和后续动作。
@@ -425,7 +437,7 @@ P0 验收条件：
 1. `gazebo.launch.py` 能稳定启动，五个 controller 为 active。
 2. MoveIt 配置的两个 controller 与 `ros2 action list` 完全一致。
 3. RViz 分别执行左右臂轨迹时 Gazebo 和 `/joint_states` 同步变化。
-4. `mtc_prototype.launch.py use_gazebo:=true` 的就绪门能够通过。
+4. `mtc_prototype.launch.py simulation_backend:=gazebo` 的就绪门能够通过。
 5. 真机 launch 的命名空间配置没有被回退或覆盖。
 
 2026-08-31 验证结果：五个 Gazebo controller 均为 active；MoveIt 加载
@@ -442,7 +454,7 @@ P0 验收条件：
 
 ### P2：继续验证逐 stage MTC
 
-逐 stage 重新规划已经实现。保存完整 `--list` 和运行日志，对照 stage index；明确
+成功解直接执行及异常后有限次恢复已经实现。保存完整 `--list` 和运行日志，对照 stage index；明确
 后续失败属于规划、controller、状态越界、姿态误差还是碰撞。不要只增加规划时间或
 watchdog。
 

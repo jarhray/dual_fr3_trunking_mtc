@@ -18,23 +18,11 @@ PROFILE_FILE = (
 )
 
 
-def test_launch_flags_resolve_to_one_explicit_backend():
-    assert resolve_gripper_backend(
-        use_fake_hardware=False,
-        use_gazebo=False,
-    ) == "franka"
-    assert resolve_gripper_backend(
-        use_fake_hardware=True,
-        use_gazebo=False,
-    ) == "fake"
-    assert resolve_gripper_backend(
-        use_fake_hardware=False,
-        use_gazebo=True,
-    ) == "gazebo"
-    assert resolve_gripper_backend(
-        use_fake_hardware=True,
-        use_gazebo=True,
-    ) == "gazebo"
+@pytest.mark.parametrize("backend,gripper_backend", [
+    ("real", "franka"), ("fake", "fake"), ("gazebo", "gazebo"), ("maniskill", "maniskill"),
+])
+def test_simulation_backend_selects_the_gripper_interface(backend, gripper_backend):
+    assert resolve_gripper_backend(backend) == gripper_backend
 
 
 def test_backend_specific_command_names_are_not_probed_at_runtime():
@@ -44,6 +32,7 @@ def test_backend_specific_command_names_are_not_probed_at_runtime():
     assert gripper_command_action_name("right", "gazebo") == (
         "/right_franka_gripper/gripper_cmd"
     )
+    assert gripper_command_action_name("left", "maniskill") == "/left_franka_gripper/gripper_cmd"
 
 
 def test_profiles_use_total_width_and_convert_only_at_moveit_boundary():
