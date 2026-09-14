@@ -61,6 +61,9 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 
 ManiSkill 默认在两次闭合成功后、下降前生成 USB 和线缆。使用 `maniskill_cable:=false` 可只运行机器人；`execute:=false` 不会生成仿真线缆。详见 [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
 
+当前线缆求解器仅有 MPM，已整理为后续对照基线；细杆模型及两种求解器的参数选择尚未实现。
+当前默认值、验证边界和后续接入位置见[线缆后端交接说明](../dual_fr3_maniskill/docs/cable_backends.md)。
+
 ### 4. 使用自己的路径
 
 复制并编辑 [config/keypoints.yaml](config/keypoints.yaml)，在上述任一入口追加：
