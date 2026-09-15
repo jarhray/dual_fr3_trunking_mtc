@@ -35,10 +35,11 @@ def test_maniskill_requires_preparation_or_explicit_cable_disable():
         preparation_cable_config("maniskill", True, False, "")
 
 
-def cable_specs():
+def cable_specs(direction="reverse"):
     keypoints = load_keypoints(ROOT / "dual_fr3_trunking_mtc/config/keypoints.yaml")
     plan = build_task_plan(build_segment_plans(keypoints), initial_leader_index=1, initial_follower_index=0)
-    return build_preparation_stage_specs(plan, PreparationConfig(simulation_cable_config=CONFIG))
+    return build_preparation_stage_specs(plan, PreparationConfig(
+        simulation_cable_config=CONFIG, leader_orientation_direction=direction))
 
 
 def test_cable_stage_is_after_successful_closures_and_before_descent():
@@ -52,19 +53,24 @@ def test_cable_stage_is_after_successful_closures_and_before_descent():
     assert all(s.stage_index == 5 for s in specs[-1].children)
 
 
-def test_planning_scene_attaches_usb_in_the_tcp_heading():
+@pytest.mark.parametrize("direction,sign", [("forward", 1.), ("reverse", -1.)])
+def test_planning_scene_attaches_usb_at_the_grip_in_the_leader_direction(direction, sign):
     from dual_fr3_maniskill.cable.planning_scene import attached_usb_scene
     from dual_fr3_maniskill.cable.model import USB_LINK
     from scipy.spatial.transform import Rotation
     import numpy as np
-    scene = attached_usb_scene(CONFIG)
+    spec = cable_specs(direction)[4]
+    assert spec.cable_orientation_direction == direction
+    scene = attached_usb_scene(CONFIG, orientation_direction=spec.cable_orientation_direction)
     attachment, = scene.robot_state.attached_collision_objects
     assert attachment.link_name == attachment.object.header.frame_id == "left_fr3_hand_tcp"
     assert attachment.object.id == USB_LINK
     assert "right_fr3_hand_tcp" not in attachment.touch_links
     q = attachment.object.mesh_poses[0].orientation
     rotation = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
-    np.testing.assert_allclose(rotation @ [0., 1., 0.], [1., 0., 0.], atol=1e-10)
+    np.testing.assert_allclose(rotation @ [0., 1., 0.], [sign, 0., 0.], atol=1e-10)
+    p = attachment.object.mesh_poses[0].position
+    np.testing.assert_allclose([p.x, p.y, p.z], [0., 0., .0075])
     assert scene.is_diff and scene.robot_state.is_diff
 
 
@@ -89,8 +95,10 @@ def test_bridge_insertion_gate_and_idempotence(closed, reserved, active, success
     assert len(calls) == int(success and not active)
 
 
-def test_native_mtc_insertion_adds_the_attached_object_without_a_robot_motion(tmp_path):
+@pytest.mark.parametrize("direction,sign", [("forward", 1.), ("reverse", -1.)])
+def test_native_mtc_insertion_adds_the_attached_object_without_a_robot_motion(tmp_path, direction, sign):
     import copy
+    import numpy as np
     import yaml
     import rclcpp
     from ament_index_python.packages import get_package_share_directory
@@ -122,11 +130,15 @@ def test_native_mtc_insertion_adds_the_attached_object_without_a_robot_motion(tm
         assert not scene.knows_frame_transform(USB_LINK)
         keypoints = load_keypoints(ROOT / "dual_fr3_trunking_mtc/config/keypoints.yaml")
         plan = build_task_plan(build_segment_plans(keypoints), initial_leader_index=1, initial_follower_index=0)
-        spec = cable_specs()[4]
+        spec = cable_specs(direction)[4]
         task, _ = create_mtc_task(node, plan, [spec], start_scene=scene)
         assert task.plan(1)
         solution = task[spec.name].solutions[0]
         assert solution.end.scene.knows_frame_transform(USB_LINK)
         assert not solution.start.scene.knows_frame_transform(USB_LINK)
+        end = solution.end.scene
+        mount = np.linalg.inv(end.get_frame_transform("left_fr3_hand_tcp")) @ end.get_frame_transform(USB_LINK)
+        np.testing.assert_allclose(mount[:3, 1], [sign, 0., 0.], atol=1e-10)
+        np.testing.assert_allclose(mount[:3, 3], [0., 0., .0075], atol=1e-10)
     finally:
         rclcpp.shutdown()

@@ -44,7 +44,8 @@ class SimulationCableController:
 
     def execute(self, spec):
         from dual_fr3_maniskill.cable.planning_scene import attached_usb_scene
-        scene = attached_usb_scene(spec.cable_config)
+        scene = attached_usb_scene(spec.cable_config,
+            orientation_direction=spec.cable_orientation_direction)
         # Discover both endpoints before making the physical insertion.
         if not self.apply.wait_for_service(timeout_sec=5.):
             raise RuntimeError("/apply_planning_scene unavailable; cable has not been inserted")

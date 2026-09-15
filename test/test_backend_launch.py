@@ -84,3 +84,31 @@ def test_mtc_entry_selects_deferred_cable_only_for_maniskill(backend, enabled, e
     arguments = dict(include.launch_arguments)
     selected = perform_substitutions(context, normalize_to_list_of_substitutions(arguments["maniskill_scene"]))
     assert selected == expected
+
+
+@pytest.mark.parametrize("solver", ["mpm", "rope_actor"])
+def test_mtc_forwards_cable_solver_to_moveit(solver):
+    from launch.utilities import perform_substitutions, normalize_to_list_of_substitutions
+    description = load_launch("dual_fr3_trunking_mtc", "mtc_prototype.launch.py")
+    context = LaunchContext()
+    context.launch_configurations.update(simulation_backend="maniskill", cable_solver=solver,
+                                         cable_trace_dir="/tmp/rope trace")
+    apply_arguments(description, context)
+    include, = [a for a in description.entities if isinstance(a, IncludeLaunchDescription)]
+    value = dict(include.launch_arguments)["cable_solver"]
+    assert perform_substitutions(context, normalize_to_list_of_substitutions(value)) == solver
+    trace = dict(include.launch_arguments)["cable_trace_dir"]
+    assert perform_substitutions(context, normalize_to_list_of_substitutions(trace)) == "/tmp/rope trace"
+
+
+@pytest.mark.parametrize("direction", ["forward", "reverse"])
+def test_mtc_forwards_leader_orientation_to_maniskill(direction):
+    from launch.utilities import perform_substitutions, normalize_to_list_of_substitutions
+    description = load_launch("dual_fr3_trunking_mtc", "mtc_prototype.launch.py")
+    context = LaunchContext()
+    context.launch_configurations.update(simulation_backend="maniskill",
+                                         leader_orientation_direction=direction)
+    apply_arguments(description, context)
+    include, = [a for a in description.entities if isinstance(a, IncludeLaunchDescription)]
+    value = dict(include.launch_arguments)["leader_orientation_direction"]
+    assert perform_substitutions(context, normalize_to_list_of_substitutions(value)) == direction

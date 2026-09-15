@@ -257,7 +257,8 @@ def create_mtc_task(
         if spec.mtc_stage_type == "SimulationCable":
             from dual_fr3_maniskill.cable.planning_scene import usb_collision_object
             from dual_fr3_maniskill.cable.threading import LEFT_TCP, TOUCH_LINKS
-            obj = usb_collision_object(spec.cable_config)
+            obj = usb_collision_object(spec.cable_config,
+                orientation_direction=spec.cable_orientation_direction)
             attach = stages.ModifyPlanningScene(spec.name)
             attach.addObject(obj)
             attach.attachObject(obj.id, LEFT_TCP)

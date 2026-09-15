@@ -32,7 +32,7 @@ keypoints:
 
   - name: entry_5
     frame_id: left_fr3_link0
-    position: [0.364, -0.07, 0.10]
+    position: [0.364, -0.07, 0.14]
     in_slot: false
     role: seat_edge
     metadata:

@@ -117,8 +117,8 @@ def build_preparation_stage_specs(
     height = config.approach_height
     cable_widths = {}
     if config.simulation_cable_config:
-        from dual_fr3_maniskill.cable.model import load_config
-        cable_widths = {"leader": 2*load_config(config.simulation_cable_config)["usb"]["finger_position"],
+        from dual_fr3_maniskill.cable.model import load_geometry_config
+        cable_widths = {"leader": 2*load_geometry_config(config.simulation_cable_config)["usb"]["finger_position"],
                         "follower": 0.}
     actor_settings = {
         "leader": (
@@ -215,6 +215,7 @@ def build_preparation_stage_specs(
             frame_id="world", vector=(0., 0., 0.), execution_order=[INSERT_CABLE],
             primitive=INSERT_CABLE, mtc_stage_type="SimulationCable", planner="ModifyPlanningScene",
             phase="preparation", cable_config=config.simulation_cable_config,
+            cable_orientation_direction=config.leader_orientation_direction,
             info="fix USB to left TCP and thread the cable through the sliding right TCP guide",
         ))
 

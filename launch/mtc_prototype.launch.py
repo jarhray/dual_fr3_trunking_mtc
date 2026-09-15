@@ -25,6 +25,7 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from dual_fr3_maniskill.cable.backends import CABLE_SOLVERS
 from dual_fr3_moveit_config.moveit_resources import build_moveit_resources
 from dual_fr3_moveit_config.maniskill_resources import build_maniskill_resources
 from dual_fr3_trunking_mtc.runtime.config import (
@@ -60,7 +61,11 @@ def generate_launch_description():
     maniskill_viewer = declare_argument("maniskill_viewer", True)
     maniskill_cable = declare_argument("maniskill_cable", True,
         description="Insert a held USB cable after both preparation gripper closures, only in ManiSkill")
+    cable_solver = declare_argument("cable_solver", "mpm", choices=CABLE_SOLVERS,
+        description="ManiSkill cable model: MPM or PhysX Rope-Actor capsule chain")
     cable_config = declare_argument("cable_config", "")
+    cable_trace_dir = declare_argument("cable_trace_dir", "",
+        description="Optional Rope-Actor substep trace directory; saves state automatically on failure")
     cable_scene = PythonExpression(["'trunking_cable' if '", LaunchConfiguration("simulation_backend"),
         "' == 'maniskill' and '",
         LaunchConfiguration("maniskill_cable"), "'.lower() in ('true', '1', 'yes', 'on') else 'robot'"])
@@ -262,6 +267,9 @@ def generate_launch_description():
             "maniskill_viewer": LaunchConfiguration("maniskill_viewer"),
             "maniskill_scene": cable_scene,
             "cable_config": LaunchConfiguration("cable_config"),
+            "cable_solver": LaunchConfiguration("cable_solver"),
+            "cable_trace_dir": LaunchConfiguration("cable_trace_dir"),
+            "leader_orientation_direction": LaunchConfiguration("leader_orientation_direction"),
             "trajectory_execution_duration_scaling": LaunchConfiguration(
                 "trajectory_execution_duration_scaling"
             ),
@@ -455,6 +463,8 @@ def generate_launch_description():
             maniskill_viewer,
             maniskill_cable,
             cable_config,
+            cable_solver,
+            cable_trace_dir,
             gz_args,
             gazebo_effort,
             keypoints_file,
