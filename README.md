@@ -53,15 +53,15 @@ ManiSkill 执行，并在准备阶段生成线缆：
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  simulation_backend:=maniskill execute:=true \
+  simulation_backend:=maniskill cable_solver:=rope_actor load_cable:=true execute:=true \
   maniskill_python:="$PWD/.venv/bin/python"
 ```
 
-流程为：完整路径预检 → 双臂到初始点上方 → 左、右夹爪依次闭合 → 双臂下降 → 正式走线。默认在两次闭合和下降前等待确认，按 Enter 继续，输入 `q` 中止；无可用终端输入时会中止。自动仿真可加 `preparation_interactive:=false`。
+ManiSkill 流程为：完整路径预检 → 张开 → 按关键点提前定位 USB/线缆 → 接近准备位 → 接触闭合 → 解除定位 → 稳定验证 → 规划附着 → 下降与走线。默认在两次闭合和下降前等待确认，按 Enter 继续，输入 `q` 中止；无可用终端输入时会中止。自动仿真可加 `preparation_interactive:=false`。
 
-ManiSkill 默认在两次闭合成功后、下降前生成 USB 和线缆。使用 `maniskill_cable:=false` 可只运行机器人；`execute:=false` 不会生成仿真线缆。详见 [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
+ManiSkill 在闭合前创建 USB。`load_cable:=false` 不创建线缆，但保留双臂准备、下降和原后续 MTC 轨迹，作为 USB 搬运调试；`maniskill_cable:=false` 只运行机器人；`execute:=false` 不会生成物体。详见 [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
 
-使用 `cable_solver:=rope_actor` 选择参考 Rope-Actor 的胶囊关节链，`cable_solver:=mpm`（默认）选择原有 MPM。
+本次接触夹持验收使用 `cable_solver:=rope_actor` 和 USB-only；MPM 后续完善。全局默认仍是 `mpm`，因此推荐命令显式选择 Rope-Actor。仅 USB 的完整命令见 [MTC 使用说明](../dual_fr3_maniskill/docs/mtc_cable.md#启动)。
 参数、模型差异和验证方法见[线缆建模方式](../dual_fr3_maniskill/docs/cable_backends.md)。
 
 ### 4. 使用自己的路径
@@ -98,7 +98,8 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
 | `preparation_interactive` | `true` | 准备阶段终端确认 |
 | `motion_velocity_scaling` / `motion_acceleration_scaling` | 均为 `0.2` | 运动速度和加速度比例 |
 | `cable_solver` | `mpm` | ManiSkill 线缆模型：`mpm` 或 `rope_actor` |
-| `maniskill_cable` | `true` | 仅 ManiSkill 使用准备阶段线缆 |
+| `maniskill_cable` | `true` | 启用 ManiSkill USB 接触夹持场景 |
+| `load_cable` | `true` | `false` 不创建线缆，保留原双臂 MTC 轨迹以调试 USB 搬运 |
 | `use_rviz` / `maniskill_viewer` | 均为 `true` | 分别控制 RViz 和 ManiSkill 窗口 |
 
 完整参数可查询：
@@ -112,4 +113,4 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py --show-args
 - [任务配置](docs/configuration.md)：关键点、坐标、朝向、夹爪参数和规划参数。
 - [执行与排查](docs/execution.md)：执行流程、ROS 接口、失败诊断和逐段工具。
 - [架构说明](ARCHITECTURE.md)：启动链、模块职责和扩展位置。
-- [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)：延迟生成、固定夹持和滑孔约束。
+- [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)：接触夹持、定位释放和滑移监测。

@@ -3,6 +3,7 @@
 import copy
 import logging
 import math
+import re
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -87,6 +88,11 @@ def test_fr3_continuous_line_passes_without_disabling_jump_or_tcp_checks(tmp_pat
                 assert "Cartesian TCP in-place deviation" in caplog.text
                 assert "accepted" in caplog.text
             else:
-                assert "Achieved: 0.901639" in task[specs[0].name].failures[0].comment
+                comment = task[specs[0].name].failures[0].comment
+                achieved = re.search(r"Achieved:\s*([0-9.]+)", comment)
+                assert achieved, comment
+                # IK interpolation sample counts vary with native versions;
+                # partial Cartesian paths must still fail the full-path gate.
+                assert 0.0 < float(achieved.group(1)) < 1.0, comment
     finally:
         rclcpp.shutdown()

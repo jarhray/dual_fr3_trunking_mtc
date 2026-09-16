@@ -243,7 +243,9 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--simulation-backend", default=DEFAULTS.simulation_backend,
                         choices=SIMULATION_BACKENDS)
     parser.add_argument("--maniskill-cable", type=_parse_bool, default=True,
-                        help="insert cable after preparation, only with the maniskill backend")
+                        help="enable USB contact-grasp preparation with the maniskill backend")
+    parser.add_argument("--load-cable", type=_parse_bool, default=True,
+                        help="false: USB grasp only; no right-arm preparation, descent or routing")
     parser.add_argument("--cable-config", default="")
     parser.add_argument("--execute", type=_parse_bool, default=DEFAULTS.execute)
     parser.add_argument(
@@ -334,6 +336,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .simulation_cable import preparation_cable_config, SimulationCableController
         cable_config = preparation_cable_config(args.simulation_backend, args.maniskill_cable,
                                                 args.preparation_enabled, args.cable_config)
+        if args.simulation_backend == "maniskill" and not args.load_cable and not cable_config:
+            raise ValueError("USB-only preparation requires maniskill_cable=true and preparation_enabled=true")
         gripper_profiles = GripperProfileRegistry.load(
             args.gripper_profiles_file
         )
@@ -373,6 +377,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             leader_gripper_profile=args.preparation_leader_gripper_profile,
             follower_gripper_profile=args.preparation_follower_gripper_profile,
             simulation_cable_config=cable_config,
+            load_cable=args.load_cable,
+            tool_roll=args.tool_roll,
+            tool_pitch=args.tool_pitch,
         )
         # Validate preparation profile names even in planning-only mode.
         gripper_profiles.get(preparation_config.leader_gripper_profile)
@@ -437,6 +444,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "unified MTC stage sequence:\n%s",
             mtc_stage_sequence_to_text(specs),
         )
+        if cable_config and not args.load_cable:
+            logger.info("USB-only trajectory mode: cable physics disabled; original "
+                        "dual-arm motion stages retained for USB transport testing, not cable-routing validation")
         if args.plan:
             if preparation_specs:
                 planned = plan_preparation_candidates(
@@ -485,6 +495,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             logger.info("build-only mode; planning skipped")
 
+        if cable_config and not args.load_cable:
+            logger.info("USB-only trajectory debugging: original MTC motion stages retained; "
+                        "no cable exists, so this is not a cable-routing completion result")
         stage_publisher = _start_stage_sequence_publisher(specs, logger)
         if args.keep_alive_sec > 0.0:
             deadline = time.monotonic() + args.keep_alive_sec

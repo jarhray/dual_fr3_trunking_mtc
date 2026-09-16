@@ -20,6 +20,8 @@
 
 准备阶段的上方定位会自动执行，交互确认只发生在两次闭合和下降之前。按 Enter 继续、输入 `q` 中止；`preparation_interactive:=false` 跳过这些确认，适用于自动仿真。
 
+ManiSkill USB 场景在机械臂接近前按关键点准备目标 `spawn` 并固定，随后张开接近，闭合动作结束后仍须通过持续双指接触、解除世界定位、释放后稳定验证，才能提交规划附着和搬运。`load_cable:=false` 不创建线缆，但保留双臂准备、夹持验证、下降及原正式 MTC 运动，用于 USB 搬运调试，不代表完成线缆布线。详见[接口与状态](../../dual_fr3_maniskill/docs/mtc_cable.md)。
+
 ## 真机夹爪回零
 
 真机执行默认 `home_grippers_before_execute:=true`，会依次执行两个夹爪 Homing，夹爪内部应为空。若已手动回零并放入线缆，启动参数使用：
@@ -70,7 +72,7 @@ ros2 service call /dual_fr3_trunking_planner/replan std_srvs/srv/Trigger '{}'
 | 无法连接 `execute_task_solution` | 使用本包 MTC launch，它会加载 `move_group/ExecuteTaskSolutionCapability` |
 | RViz 没有关键点球体 | MTC 入口不发布该标记；使用可视化入口或单独运行规划节点 |
 | 规划成功但不运动 | 核对 `execute`、准备阶段确认和终端执行错误 |
-| ManiSkill 没有线缆 | 核对 `maniskill_cable`、准备开关、两次闭合及 spawn 返回结果；只规划不会生成 |
+| ManiSkill 没有线缆 | 核对 `maniskill_cable`、`load_cable`、准备开关及闭合前 spawn 返回结果；只规划不会生成；USB-only 本就不创建线缆 |
 | 动作超时或状态停滞 | 检查 `/clock`、控制器状态和仿真错误；关闭窗口不等于提升物理步进速度 |
 
 ```bash
@@ -112,3 +114,5 @@ ros2 run dual_fr3_trunking_mtc trunking_step_by_step.py
 ```
 
 按 Enter 执行、`s` 跳过、`q` 退出；Gazebo 日志位于 `/tmp/dual_fr3_trunking_gazebo.log`。更多开关用各脚本的 `--help` 查询。
+
+ManiSkill 夹爪结果等待使用 profile 的仿真时间超时；墙钟保护为 `max(120, 30 × profile.timeout)` 秒。其他后端仍使用原墙钟超时。动作结束后仍须通过双指接触、释放定位和稳定验证，才能开始搬运。

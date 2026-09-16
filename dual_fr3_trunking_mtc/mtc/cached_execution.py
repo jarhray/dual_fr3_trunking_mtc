@@ -116,6 +116,12 @@ def execute_cached_solution(
         logger.info("executing %d cached stages from the successful plan", len(cached))
         for index, item in enumerate(cached):
             spec = item.spec
+            if cable_controller is not None and (getattr(spec, "phase", "") == "formal" or getattr(spec, "primitive", "") == "dual_cartesian_descent"):
+                try:
+                    cable_controller.ensure_grasp()
+                except Exception:
+                    logger.exception("USB grasp is not stable; stopping before transport")
+                    return False
             if getattr(spec, "confirmation_required", False) and spec.stage_index not in confirmed:
                 if confirmation_callback is None or not confirmation_callback(spec):
                     logger.error(
@@ -127,10 +133,10 @@ def execute_cached_solution(
             if spec.mtc_stage_type == "SimulationCable":
                 try:
                     if cable_controller is None or not cable_controller.execute(spec):
-                        logger.error("simulation cable insertion failed; stopping before descent")
+                        logger.error("simulation USB operation failed; stopping before transport")
                         return False
                 except Exception:
-                    logger.exception("simulation cable insertion raised; stopping before descent")
+                    logger.exception("simulation USB operation raised; stopping before transport")
                     return False
                 continue
             if spec.mtc_stage_type == "GripperOperation":

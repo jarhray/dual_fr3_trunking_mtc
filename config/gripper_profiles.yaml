@@ -15,7 +15,7 @@ profiles:
   # calibrated against the actual cable and trunking geometry.
   cable_tip:
     action: grasp
-    width: 0.005
+    width: 0.0045
     speed: 0.02
     force: 10.0
     epsilon:

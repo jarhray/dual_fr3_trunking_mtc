@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
@@ -34,7 +35,8 @@ def gripper_result_succeeded(result: Any, action: str) -> bool:
     if hasattr(result, "reached_goal"):
         # GripperCommand has no distinct grasp action.  A position controller
         # may report contact as stalled before it reaches the requested width;
-        # that is a valid grasp, but not a valid move.
+        # this only completes a grasp command, and never proves object retention.
+        # ManiSkill preparation separately checks contact and post-release stability.
         return bool(result.reached_goal) or (
             action == "grasp" and bool(getattr(result, "stalled", False))
         )
@@ -278,6 +280,21 @@ class GripperController:
             f"GripperController initialized with backend={backend}"
         )
 
+    def _wait_for_result(self, future, timeout):
+        if self.backend != "maniskill":
+            self._rclpy.spin_until_future_complete(
+                self.node, future, executor=self._executor, timeout_sec=timeout)
+            return
+        # Rope contacts can run far below real time. Keep the profile's timeout
+        # in simulation seconds, plus a finite wall watchdog for a stopped clock.
+        simulation_start = self.node.get_clock().now().nanoseconds
+        wall_deadline = time.monotonic()+max(120., 30.*timeout)
+        while not future.done() and self._context.ok():
+            elapsed = (self.node.get_clock().now().nanoseconds-simulation_start)*1.e-9
+            if elapsed >= timeout or time.monotonic() >= wall_deadline:
+                break
+            self._rclpy.spin_once(self.node, executor=self._executor, timeout_sec=.1)
+
     def _send_goal(self, client, goal, timeout: float, label: str):
         if not client.wait_for_server(timeout_sec=min(timeout, 5.0)):
             self.node.get_logger().error(f"{label} action server unavailable")
@@ -299,12 +316,7 @@ class GripperController:
             return None
 
         result_future = goal_handle.get_result_async()
-        self._rclpy.spin_until_future_complete(
-            self.node,
-            result_future,
-            executor=self._executor,
-            timeout_sec=timeout,
-        )
+        self._wait_for_result(result_future, timeout)
         if not result_future.done():
             self.node.get_logger().error(f"{label} result timed out; cancelling")
             goal_handle.cancel_goal_async()

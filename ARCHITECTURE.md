@@ -55,7 +55,7 @@ mtc_prototype.launch.py
 | `straighten` | 原地调整朝向，再做笛卡尔平移 |
 | `move_anchor` | leader 通过 OMPL 换锚点，检查 TCP 高度及路程 |
 | `seat_edge` | 压线说明阶段、可选夹爪操作、leader 转向让位、follower 转向并用关节插值到目标 |
-| `SimulationCable` | ManiSkill 准备闭合后生成线缆，并同步 USB 附着碰撞体 |
+| `SimulationCable` | `spawn` 在张开准备后创建世界定位的 USB/可选线缆；`release_verify` 在实际接触和释放后稳定验证成功时才同步规划附着体 |
 
 `seat_edge` 中的真实下压接触仍是占位，不代表完成了物理卡线。原地转向用 TCP 位置约束和路径偏差检查限制漂移。
 

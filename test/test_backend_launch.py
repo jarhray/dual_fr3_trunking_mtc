@@ -101,6 +101,21 @@ def test_mtc_forwards_cable_solver_to_moveit(solver):
     assert perform_substitutions(context, normalize_to_list_of_substitutions(trace)) == "/tmp/rope trace"
 
 
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_mtc_forwards_load_cable_and_keeps_usb_scene(enabled):
+    from launch.utilities import perform_substitutions, normalize_to_list_of_substitutions
+    description = load_launch("dual_fr3_trunking_mtc", "mtc_prototype.launch.py")
+    context = LaunchContext()
+    context.launch_configurations.update(simulation_backend="maniskill", load_cable=enabled)
+    apply_arguments(description, context)
+    include, = [a for a in description.entities if isinstance(a, IncludeLaunchDescription)]
+    arguments = dict(include.launch_arguments)
+    value = perform_substitutions(context, normalize_to_list_of_substitutions(arguments["load_cable"]))
+    assert value == enabled
+    scene = perform_substitutions(context, normalize_to_list_of_substitutions(arguments["maniskill_scene"]))
+    assert scene == "trunking_cable"
+
+
 @pytest.mark.parametrize("direction", ["forward", "reverse"])
 def test_mtc_forwards_leader_orientation_to_maniskill(direction):
     from launch.utilities import perform_substitutions, normalize_to_list_of_substitutions

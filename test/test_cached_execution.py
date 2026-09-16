@@ -207,11 +207,13 @@ def test_gripper_failure_does_not_continue_or_replan():
     assert not initial.task.executed
 
 
-@pytest.mark.parametrize("failed", ["left", "right", "cable", None])
-def test_cable_runs_only_after_both_closures_and_failure_prevents_descent(failed):
-    specs = [spec(0, "GripperOperation"), spec(1, "GripperOperation"),
-             spec(2, "SimulationCable"), spec(3)]
-    specs[0].actor, specs[1].actor = "left", "right"
+@pytest.mark.parametrize("failed", ["spawn", "left", "right", "release_verify", None])
+def test_contact_preparation_failure_prevents_later_stages_and_transport(failed):
+    specs = [spec(0, "SimulationCable"), spec(1, "GripperOperation"),
+             spec(2, "GripperOperation"), spec(3, "SimulationCable"), spec(4)]
+    specs[0].cable_operation, specs[3].cable_operation = "spawn", "release_verify"
+    specs[1].actor, specs[2].actor = "left", "right"
+    specs[-1].phase = "formal"
     initial = planned(specs)
     events = []
 
@@ -220,16 +222,28 @@ def test_cable_runs_only_after_both_closures_and_failure_prevents_descent(failed
         return failed != request.actor
 
     def insert(_spec):
-        events.append("cable")
-        return failed != "cable"
+        events.append(_spec.cable_operation)
+        return failed != _spec.cable_operation
 
     result = cached_execution.execute_cached_solution(
         initial, None, None, args(), LOGGER, gripper_controller=NS(execute=close),
-        cable_controller=NS(execute=insert), planner=unexpected_plan,
+        cable_controller=NS(execute=insert, ensure_grasp=lambda: True), planner=unexpected_plan,
     )
     assert result is (failed is None)
-    assert events == {"left": ["left"], "right": ["left", "right"]}.get(failed, ["left", "right", "cable"])
+    all_events = ["spawn", "left", "right", "release_verify"]
+    assert events == (all_events if failed is None else all_events[:all_events.index(failed)+1])
     assert len(initial.task.executed) == int(failed is None)
+
+
+def test_lost_grasp_blocks_formal_transport_without_motion_or_recovery():
+    transport = spec(0)
+    transport.phase = "formal"
+    initial = planned([transport])
+    def failed_status():
+        raise RuntimeError("dropped")
+    assert not cached_execution.execute_cached_solution(initial, None, None, args(), LOGGER,
+        cable_controller=NS(ensure_grasp=failed_status), planner=unexpected_plan)
+    assert not initial.task.executed
 
 
 def test_descent_recovery_does_not_reinsert_cable():

@@ -258,10 +258,15 @@ def create_mtc_task(
             from dual_fr3_maniskill.cable.planning_scene import usb_collision_object
             from dual_fr3_maniskill.cable.threading import LEFT_TCP, TOUCH_LINKS
             obj = usb_collision_object(spec.cable_config,
-                orientation_direction=spec.cable_orientation_direction)
+                orientation_direction=spec.cable_orientation_direction,
+                preparation_tcp_pose=(spec.cable_preparation_poses.get("left")
+                    if spec.cable_operation == "spawn" else None))
             attach = stages.ModifyPlanningScene(spec.name)
             attach.addObject(obj)
-            attach.attachObject(obj.id, LEFT_TCP)
+            if spec.cable_operation == "release_verify":
+                attach.attachObject(obj.id, LEFT_TCP)
+            elif spec.cable_operation != "spawn":
+                raise ValueError(f"Unknown simulation USB operation: {spec.cable_operation}")
             attach.allowCollisions(obj.id, list(TOUCH_LINKS), True)
             task.add(attach)
             continue

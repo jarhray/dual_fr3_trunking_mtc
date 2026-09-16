@@ -16,6 +16,7 @@
   <depend>franka_msgs</depend>
   <depend>moveit_msgs</depend>
   <depend>rclpy</depend>
+  <depend>rcl_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>

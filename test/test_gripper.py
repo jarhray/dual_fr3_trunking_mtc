@@ -90,3 +90,28 @@ def test_gripper_command_contact_counts_only_as_a_successful_grasp(
     )()
 
     assert gripper_result_succeeded(result, action) is expected
+
+
+@pytest.mark.parametrize("clock_rate,complete_wall,expected_done", [
+    (.02, 11., True),  # 11 wall seconds are only .22 simulation seconds.
+    (1., 11., False),  # Profile still expires at 10 simulation seconds.
+    (0., 301., False),  # Paused simulation cannot wait forever.
+])
+def test_maniskill_result_timeout_uses_simulation_clock_with_wall_watchdog(
+        monkeypatch, clock_rate, complete_wall, expected_done):
+    from types import SimpleNamespace as NS
+    from dual_fr3_trunking_mtc.gripper import GripperController
+    wall = [0.]
+    monkeypatch.setattr('dual_fr3_trunking_mtc.gripper.time.monotonic', lambda: wall[0])
+    controller = object.__new__(GripperController)
+    controller.backend = 'maniskill'
+    controller._context = NS(ok=lambda: True)
+    controller._executor = None
+    controller.node = NS(get_clock=lambda: NS(now=lambda: NS(nanoseconds=int(wall[0]*clock_rate*1.e9))))
+    def spin(*args, **kwargs):
+        wall[0] += 1.
+    controller._rclpy = NS(spin_once=spin)
+    future = NS(done=lambda: wall[0] >= complete_wall)
+    controller._wait_for_result(future, 10.)
+    assert future.done() is expected_done
+    assert wall[0] <= 300.

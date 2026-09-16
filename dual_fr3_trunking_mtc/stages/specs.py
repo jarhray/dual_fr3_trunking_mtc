@@ -37,7 +37,9 @@ class MtcStageSpec:
     gripper_action: str = ""
     gripper_width_override: float | None = None
     cable_config: str = ""
+    cable_operation: str = "spawn"
     cable_orientation_direction: str = DEFAULT_LEADER_ORIENTATION_DIRECTION
+    cable_preparation_poses: Dict[str, Any] = field(default_factory=dict)
     phase: str = "formal"
     confirmation_required: bool = False
     children: tuple[MtcStageSpec, ...] = ()
@@ -68,7 +70,9 @@ def mtc_stage_spec_to_dict(spec: MtcStageSpec) -> Dict[str, Any]:
         "gripper_action": spec.gripper_action,
         "gripper_width_override": spec.gripper_width_override,
         "cable_config": spec.cable_config,
+        "cable_operation": spec.cable_operation,
         "cable_orientation_direction": spec.cable_orientation_direction,
+        "cable_preparation_poses": spec.cable_preparation_poses,
         "phase": spec.phase,
         "confirmation_required": spec.confirmation_required,
         "children": [mtc_stage_spec_to_dict(child) for child in spec.children],

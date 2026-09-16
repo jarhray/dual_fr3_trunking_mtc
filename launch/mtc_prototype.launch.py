@@ -60,7 +60,9 @@ def generate_launch_description():
         "MANISKILL_PYTHON", str(Path.cwd() / ".venv/bin/python")))
     maniskill_viewer = declare_argument("maniskill_viewer", True)
     maniskill_cable = declare_argument("maniskill_cable", True,
-        description="Insert a held USB cable after both preparation gripper closures, only in ManiSkill")
+        description="Enable the ManiSkill USB contact-grasp preparation scene")
+    load_cable = declare_argument("load_cable", True, choices=("true", "false"),
+        description="false: omit cable physics, retain original dual-arm MTC trajectories for USB grasp debugging")
     cable_solver = declare_argument("cable_solver", "mpm", choices=CABLE_SOLVERS,
         description="ManiSkill cable model: MPM or PhysX Rope-Actor capsule chain")
     cable_config = declare_argument("cable_config", "")
@@ -267,6 +269,7 @@ def generate_launch_description():
             "maniskill_viewer": LaunchConfiguration("maniskill_viewer"),
             "maniskill_scene": cable_scene,
             "cable_config": LaunchConfiguration("cable_config"),
+            "load_cable": LaunchConfiguration("load_cable"),
             "cable_solver": LaunchConfiguration("cable_solver"),
             "cable_trace_dir": LaunchConfiguration("cable_trace_dir"),
             "leader_orientation_direction": LaunchConfiguration("leader_orientation_direction"),
@@ -282,6 +285,7 @@ def generate_launch_description():
 
     mtc_arguments = [
         "--maniskill-cable", LaunchConfiguration("maniskill_cable"),
+        "--load-cable", LaunchConfiguration("load_cable"),
         "--cable-config", LaunchConfiguration("cable_config"),
         "--simulation-backend",
         backend,
@@ -462,6 +466,7 @@ def generate_launch_description():
             maniskill_python,
             maniskill_viewer,
             maniskill_cable,
+            load_cable,
             cable_config,
             cable_solver,
             cable_trace_dir,

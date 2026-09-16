@@ -4,6 +4,7 @@ from inspect import signature
 from types import SimpleNamespace
 
 import pytest
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
 from shape_msgs.msg import SolidPrimitive
 
 from dual_fr3_trunking_mtc.models import Keypoint, TaskPlan
@@ -136,7 +137,7 @@ def test_create_motion_planners_configures_move_group_ompl():
     )
 
     assert cartesian.step_size == pytest.approx(0.01)
-    assert cartesian.jump_threshold == pytest.approx(2.0)
+    assert cartesian.jump_threshold == pytest.approx(DEFAULTS.cartesian_jump_threshold)
     assert cartesian.min_fraction == pytest.approx(1.0)
     assert jointspace.max_velocity_scaling_factor == pytest.approx(0.1)
     assert ompl.node is node

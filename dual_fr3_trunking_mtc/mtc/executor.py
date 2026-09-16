@@ -30,6 +30,12 @@ def execute_stage_by_stage(
         len(executable_specs),
     )
     for ordinal, spec in enumerate(executable_specs, start=1):
+        if cable_controller is not None and (getattr(spec, "phase", "") == "formal" or getattr(spec, "primitive", "") == "dual_cartesian_descent"):
+            try:
+                cable_controller.ensure_grasp()
+            except Exception:
+                logger.exception("USB grasp is not stable; stopping before transport")
+                return False
         if getattr(spec, "confirmation_required", False):
             if confirmation_callback is None:
                 logger.error(
@@ -44,10 +50,10 @@ def execute_stage_by_stage(
         if getattr(spec, "mtc_stage_type", "") == "SimulationCable":
             try:
                 if cable_controller is None or not cable_controller.execute(spec):
-                    logger.error("simulation cable insertion failed; stopping before descent")
+                    logger.error("simulation USB operation failed; stopping before transport")
                     return False
             except Exception:
-                logger.exception("simulation cable insertion raised; stopping before descent")
+                logger.exception("simulation USB operation raised; stopping before transport")
                 return False
             continue
 
