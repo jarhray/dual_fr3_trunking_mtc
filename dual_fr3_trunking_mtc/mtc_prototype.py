@@ -244,6 +244,7 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
                         choices=SIMULATION_BACKENDS)
     parser.add_argument("--maniskill-cable", type=_parse_bool, default=True,
                         help="enable USB contact-grasp preparation with the maniskill backend")
+    parser.add_argument("--insertion-enabled", type=_parse_bool, default=False)
     parser.add_argument("--load-cable", type=_parse_bool, default=True,
                         help="false: USB grasp only; no right-arm preparation, descent or routing")
     parser.add_argument("--cable-config", default="")
@@ -338,6 +339,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                                                 args.preparation_enabled, args.cable_config)
         if args.simulation_backend == "maniskill" and not args.load_cable and not cable_config:
             raise ValueError("USB-only preparation requires maniskill_cable=true and preparation_enabled=true")
+        if args.insertion_enabled and (not cable_config or args.simulation_backend != "maniskill"):
+            raise ValueError("Insertion requires ManiSkill contact-grasp preparation")
         gripper_profiles = GripperProfileRegistry.load(
             args.gripper_profiles_file
         )
@@ -422,6 +425,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.execute and cable_config:
             cable_controller = SimulationCableController(backend=args.simulation_backend)
+            if args.insertion_enabled:
+                from .insertion import TerminalInsertion
+                terminal_insertion = TerminalInsertion(cable_controller, cable_config, node, logger)
+                terminal_insertion.sync_socket()
 
         logger.info(
             "loaded %d keypoints, %d segments, %d task steps, "
@@ -498,6 +505,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if cable_config and not args.load_cable:
             logger.info("USB-only trajectory debugging: original MTC motion stages retained; "
                         "no cable exists, so this is not a cable-routing completion result")
+        if args.insertion_enabled and args.plan and args.execute:
+            if not terminal_insertion.execute(gripper_controller):
+                return 4
         stage_publisher = _start_stage_sequence_publisher(specs, logger)
         if args.keep_alive_sec > 0.0:
             deadline = time.monotonic() + args.keep_alive_sec

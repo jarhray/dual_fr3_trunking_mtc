@@ -29,7 +29,9 @@ from dual_fr3_maniskill.cable.backends import CABLE_SOLVERS
 from dual_fr3_moveit_config.moveit_resources import build_moveit_resources
 from dual_fr3_moveit_config.maniskill_resources import build_maniskill_resources
 from dual_fr3_trunking_mtc.runtime.config import (
-    DEFAULTS, SIMULATION_BACKENDS, launch_default,
+    DEFAULTS,
+    SIMULATION_BACKENDS,
+    launch_default,
 )
 
 
@@ -54,38 +56,75 @@ def generate_launch_description():
     start_gripper = declare_argument("start_gripper", DEFAULTS.start_gripper)
     ee_id = declare_argument("ee_id", DEFAULTS.ee_id)
     use_rviz = declare_argument("use_rviz", DEFAULTS.use_rviz)
-    simulation_backend = declare_argument("simulation_backend", DEFAULTS.simulation_backend,
-        choices=SIMULATION_BACKENDS, description="Robot execution backend (default: gazebo)")
-    maniskill_python = declare_argument("maniskill_python", os.environ.get(
-        "MANISKILL_PYTHON", str(Path.cwd() / ".venv/bin/python")))
+    simulation_backend = declare_argument(
+        "simulation_backend",
+        DEFAULTS.simulation_backend,
+        choices=SIMULATION_BACKENDS,
+        description="Robot execution backend (default: gazebo)",
+    )
+    maniskill_python = declare_argument(
+        "maniskill_python",
+        os.environ.get("MANISKILL_PYTHON", str(Path.cwd() / ".venv/bin/python")),
+    )
     maniskill_viewer = declare_argument("maniskill_viewer", True)
-    maniskill_cable = declare_argument("maniskill_cable", True,
-        description="Enable the ManiSkill USB contact-grasp preparation scene")
-    load_cable = declare_argument("load_cable", True, choices=("true", "false"),
-        description="false: omit cable physics, retain original dual-arm MTC trajectories for USB grasp debugging")
-    cable_solver = declare_argument("cable_solver", "mpm", choices=CABLE_SOLVERS,
-        description="ManiSkill cable model: MPM or PhysX Rope-Actor capsule chain")
+    maniskill_cable = declare_argument(
+        "maniskill_cable",
+        True,
+        description="Enable the ManiSkill USB contact-grasp preparation scene",
+    )
+    insertion_enabled = declare_argument("insertion_enabled", True)
+    load_cable = declare_argument(
+        "load_cable",
+        True,
+        choices=("true", "false"),
+        description="false: omit cable physics, retain original dual-arm MTC trajectories for USB grasp debugging",
+    )
+    cable_solver = declare_argument(
+        "cable_solver",
+        "mpm",
+        choices=CABLE_SOLVERS,
+        description="ManiSkill cable model: MPM or PhysX Rope-Actor capsule chain",
+    )
     cable_config = declare_argument("cable_config", "")
-    cable_trace_dir = declare_argument("cable_trace_dir", "",
-        description="Optional Rope-Actor substep trace directory; saves state automatically on failure")
-    cable_scene = PythonExpression(["'trunking_cable' if '", LaunchConfiguration("simulation_backend"),
-        "' == 'maniskill' and '",
-        LaunchConfiguration("maniskill_cable"), "'.lower() in ('true', '1', 'yes', 'on') else 'robot'"])
+    cable_trace_dir = declare_argument(
+        "cable_trace_dir",
+        "",
+        description="Optional Rope-Actor substep trace directory; saves state automatically on failure",
+    )
+    cable_scene = PythonExpression(
+        [
+            "'trunking_cable' if '",
+            LaunchConfiguration("simulation_backend"),
+            "' == 'maniskill' and '",
+            LaunchConfiguration("maniskill_cable"),
+            "'.lower() in ('true', '1', 'yes', 'on') else 'robot'",
+        ]
+    )
 
     backend = LaunchConfiguration("simulation_backend")
     mock_hardware = PythonExpression(["'", backend, "' == 'fake'"])
     use_sim_time = PythonExpression(["'", backend, "' in ('gazebo', 'maniskill')"])
-    hardware_condition = IfCondition(PythonExpression([
-        "'", backend, "' in ('fake', 'real')",
-    ]))
-    gazebo_condition = IfCondition(PythonExpression(["'", backend, "' == 'gazebo'"]))
-    maniskill_condition = IfCondition(PythonExpression([
-        "'", backend, "' == 'maniskill'",
-    ]))
-    gz_args = declare_argument("gz_args", DEFAULTS.gz_args)
-    gazebo_effort = declare_argument(
-        "gazebo_effort", DEFAULTS.gazebo_effort
+    hardware_condition = IfCondition(
+        PythonExpression(
+            [
+                "'",
+                backend,
+                "' in ('fake', 'real')",
+            ]
+        )
     )
+    gazebo_condition = IfCondition(PythonExpression(["'", backend, "' == 'gazebo'"]))
+    maniskill_condition = IfCondition(
+        PythonExpression(
+            [
+                "'",
+                backend,
+                "' == 'maniskill'",
+            ]
+        )
+    )
+    gz_args = declare_argument("gz_args", DEFAULTS.gz_args)
+    gazebo_effort = declare_argument("gazebo_effort", DEFAULTS.gazebo_effort)
     keypoints_file = declare_argument(
         "keypoints_file",
         os.path.join(
@@ -103,9 +142,7 @@ def generate_launch_description():
     )
     leader_group = declare_argument("leader_group", DEFAULTS.leader_group)
     follower_group = declare_argument("follower_group", DEFAULTS.follower_group)
-    leader_ik_frame = declare_argument(
-        "leader_ik_frame", DEFAULTS.leader_ik_frame
-    )
+    leader_ik_frame = declare_argument("leader_ik_frame", DEFAULTS.leader_ik_frame)
     follower_ik_frame = declare_argument(
         "follower_ik_frame", DEFAULTS.follower_ik_frame
     )
@@ -115,13 +152,17 @@ def generate_launch_description():
     follower_orientation_direction = declare_argument(
         "follower_orientation_direction", DEFAULTS.follower_orientation_direction
     )
-    cartesian_step_size = declare_argument("cartesian_step_size", DEFAULTS.cartesian_step_size)
+    cartesian_step_size = declare_argument(
+        "cartesian_step_size", DEFAULTS.cartesian_step_size
+    )
     cartesian_jump_threshold = declare_argument(
-        "cartesian_jump_threshold", DEFAULTS.cartesian_jump_threshold,
+        "cartesian_jump_threshold",
+        DEFAULTS.cartesian_jump_threshold,
         description="Relative joint-space jump factor (> 1); incomplete paths are rejected",
     )
     cartesian_path_tolerance = declare_argument(
-        "cartesian_path_tolerance", DEFAULTS.cartesian_path_tolerance,
+        "cartesian_path_tolerance",
+        DEFAULTS.cartesian_path_tolerance,
         description="Maximum TCP line deviation or in-place turn drift in meters",
     )
     motion_velocity_scaling = declare_argument(
@@ -134,8 +175,7 @@ def generate_launch_description():
         "anchor_max_path_z",
         DEFAULTS.anchor_max_path_z,
         description=(
-            "Maximum TCP z in the keypoint frame during "
-            "direct_move_to_next_anchor"
+            "Maximum TCP z in the keypoint frame during " "direct_move_to_next_anchor"
         ),
     )
     leader_lead_distance = declare_argument(
@@ -164,12 +204,24 @@ def generate_launch_description():
     preparation_search_arguments = [
         declare_argument(name, getattr(DEFAULTS, name), description=description)
         for name, description in (
-            ("preparation_ik_candidates", "Maximum distinct preparation IK candidates per arm"),
+            (
+                "preparation_ik_candidates",
+                "Maximum distinct preparation IK candidates per arm",
+            ),
             ("preparation_ik_attempts", "Maximum preparation IK seeds per arm"),
             ("preparation_ik_timeout", "Maximum seconds per preparation IK seed"),
-            ("preparation_min_joint_distance", "Minimum IK candidate joint distance in radians"),
-            ("preparation_candidate_attempts", "Maximum rounds across preparation pairs"),
-            ("preparation_search_timeout", "Search seconds, checked between native solver calls"),
+            (
+                "preparation_min_joint_distance",
+                "Minimum IK candidate joint distance in radians",
+            ),
+            (
+                "preparation_candidate_attempts",
+                "Maximum rounds across preparation pairs",
+            ),
+            (
+                "preparation_search_timeout",
+                "Search seconds, checked between native solver calls",
+            ),
         )
     ]
     gripper_profiles_file = declare_argument(
@@ -190,28 +242,47 @@ def generate_launch_description():
     )
     trajectory_execution_duration_scaling = DeclareLaunchArgument(
         "trajectory_execution_duration_scaling",
-        default_value=PythonExpression(["'10.0' if '", backend, "' == 'maniskill' and '",
-            LaunchConfiguration("maniskill_cable"), "'.lower() in ('true', '1', 'yes', 'on') else '",
-            str(DEFAULTS.trajectory_execution_duration_scaling), "'"]),
+        default_value=PythonExpression(
+            [
+                "'10.0' if '",
+                backend,
+                "' == 'maniskill' and '",
+                LaunchConfiguration("maniskill_cable"),
+                "'.lower() in ('true', '1', 'yes', 'on') else '",
+                str(DEFAULTS.trajectory_execution_duration_scaling),
+                "'",
+            ]
+        ),
     )
     trajectory_execution_goal_margin = DeclareLaunchArgument(
         "trajectory_execution_goal_margin",
-        default_value=PythonExpression(["'5.0' if '", backend, "' == 'maniskill' and '",
-            LaunchConfiguration("maniskill_cable"), "'.lower() in ('true', '1', 'yes', 'on') else '",
-            str(DEFAULTS.trajectory_execution_goal_margin), "'"]),
+        default_value=PythonExpression(
+            [
+                "'5.0' if '",
+                backend,
+                "' == 'maniskill' and '",
+                LaunchConfiguration("maniskill_cable"),
+                "'.lower() in ('true', '1', 'yes', 'on') else '",
+                str(DEFAULTS.trajectory_execution_goal_margin),
+                "'",
+            ]
+        ),
     )
     plan = declare_argument("plan", DEFAULTS.plan)
     execute = declare_argument("execute", DEFAULTS.execute)
     execute_stage_by_stage = declare_argument(
-        "execute_stage_by_stage", DEFAULTS.execute_stage_by_stage,
+        "execute_stage_by_stage",
+        DEFAULTS.execute_stage_by_stage,
         description="Execute cached stages from the successful full plan; recover on failure",
     )
     planning_attempts = declare_argument(
-        "planning_attempts", DEFAULTS.planning_attempts,
+        "planning_attempts",
+        DEFAULTS.planning_attempts,
         description="Planning attempts, including pipeline retries within a preparation pair",
     )
     execution_replan_attempts = declare_argument(
-        "execution_replan_attempts", DEFAULTS.execution_replan_attempts,
+        "execution_replan_attempts",
+        DEFAULTS.execution_replan_attempts,
         description="Maximum recovery replans of unfinished stages after execution failure",
     )
     readiness_timeout = declare_argument(
@@ -223,9 +294,7 @@ def generate_launch_description():
         DEFAULTS.home_grippers_before_execute,
     )
     grippers_homed = declare_argument("grippers_homed", DEFAULTS.grippers_homed)
-    mtc_keep_alive_sec = declare_argument(
-        "mtc_keep_alive_sec", DEFAULTS.keep_alive_sec
-    )
+    mtc_keep_alive_sec = declare_argument("mtc_keep_alive_sec", DEFAULTS.keep_alive_sec)
 
     moveit_share = get_package_share_directory(moveit_package)
     hardware_resources = build_moveit_resources(
@@ -270,9 +339,12 @@ def generate_launch_description():
             "maniskill_scene": cable_scene,
             "cable_config": LaunchConfiguration("cable_config"),
             "load_cable": LaunchConfiguration("load_cable"),
+            "insertion_enabled": LaunchConfiguration("insertion_enabled"),
             "cable_solver": LaunchConfiguration("cable_solver"),
             "cable_trace_dir": LaunchConfiguration("cable_trace_dir"),
-            "leader_orientation_direction": LaunchConfiguration("leader_orientation_direction"),
+            "leader_orientation_direction": LaunchConfiguration(
+                "leader_orientation_direction"
+            ),
             "trajectory_execution_duration_scaling": LaunchConfiguration(
                 "trajectory_execution_duration_scaling"
             ),
@@ -284,9 +356,14 @@ def generate_launch_description():
     )
 
     mtc_arguments = [
-        "--maniskill-cable", LaunchConfiguration("maniskill_cable"),
-        "--load-cable", LaunchConfiguration("load_cable"),
-        "--cable-config", LaunchConfiguration("cable_config"),
+        "--maniskill-cable",
+        LaunchConfiguration("maniskill_cable"),
+        "--load-cable",
+        LaunchConfiguration("load_cable"),
+        "--insertion-enabled",
+        LaunchConfiguration("insertion_enabled"),
+        "--cable-config",
+        LaunchConfiguration("cable_config"),
         "--simulation-backend",
         backend,
         "--keypoints-file",
@@ -356,9 +433,12 @@ def generate_launch_description():
     ]
 
     for argument in preparation_search_arguments:
-        mtc_arguments.extend([
-            "--" + argument.name.replace("_", "-"), LaunchConfiguration(argument.name),
-        ])
+        mtc_arguments.extend(
+            [
+                "--" + argument.name.replace("_", "-"),
+                LaunchConfiguration(argument.name),
+            ]
+        )
 
     def mtc_node(resources, condition):
         return Node(
@@ -368,12 +448,16 @@ def generate_launch_description():
             output="screen",
             additional_env={
                 "TRUNKING_LOG_COLOR": EnvironmentVariable(
-                    "TRUNKING_LOG_COLOR", default_value="always",
+                    "TRUNKING_LOG_COLOR",
+                    default_value="always",
                 ),
             },
-            parameters=resources.as_parameters() + [{
-                "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
-            }],
+            parameters=resources.as_parameters()
+            + [
+                {
+                    "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
+                }
+            ],
             arguments=mtc_arguments,
             condition=condition,
         )
@@ -386,6 +470,7 @@ def generate_launch_description():
         gazebo_resources,
         gazebo_condition,
     )
+
     def make_maniskill_mtc(context):
         resources = build_maniskill_resources(
             scene=cable_scene.perform(context),
@@ -395,7 +480,9 @@ def generate_launch_description():
         )
         return [mtc_node(resources, None)]
 
-    maniskill_mtc_node = OpaqueFunction(function=make_maniskill_mtc, condition=maniskill_condition)
+    maniskill_mtc_node = OpaqueFunction(
+        function=make_maniskill_mtc, condition=maniskill_condition
+    )
 
     readiness_node = Node(
         package=trunking_package,
@@ -439,11 +526,7 @@ def generate_launch_description():
                     "the MTC task will not start."
                 )
             ),
-            EmitEvent(
-                event=Shutdown(
-                    reason="Dual FR3 readiness checks failed."
-                )
-            ),
+            EmitEvent(event=Shutdown(reason="Dual FR3 readiness checks failed.")),
         ]
 
     start_mtc_when_ready = RegisterEventHandler(
@@ -467,6 +550,7 @@ def generate_launch_description():
             maniskill_viewer,
             maniskill_cable,
             load_cable,
+            insertion_enabled,
             cable_config,
             cable_solver,
             cable_trace_dir,

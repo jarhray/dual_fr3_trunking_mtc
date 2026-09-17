@@ -116,3 +116,5 @@ ros2 run dual_fr3_trunking_mtc trunking_step_by_step.py
 按 Enter 执行、`s` 跳过、`q` 退出；Gazebo 日志位于 `/tmp/dual_fr3_trunking_gazebo.log`。更多开关用各脚本的 `--help` 查询。
 
 ManiSkill 夹爪结果等待使用 profile 的仿真时间超时；墙钟保护为 `max(120, 30 × profile.timeout)` 秒。其他后端仍使用原墙钟超时。动作结束后仍须通过双指接触、释放定位和稳定验证，才能开始搬运。
+
+末端插入现可通过 `insertion_enabled:=true` 启用；几何、反馈、保持、双臂释放回位、参数及实际验收边界见 [USB 插入说明](../../dual_fr3_maniskill/docs/usb_insertion.md)。早期验证记录中“未实现插入”的说明仅适用于当时版本。

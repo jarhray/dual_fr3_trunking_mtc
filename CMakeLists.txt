@@ -26,6 +26,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
 
+  ament_add_pytest_test(test_terminal_insertion test/test_terminal_insertion.py)
   ament_add_pytest_test(test_mtc_prototype test/test_mtc_prototype.py)
   ament_add_pytest_test(test_path_length test/test_path_length.py)
   ament_add_pytest_test(test_diagnostics test/test_diagnostics.py)
