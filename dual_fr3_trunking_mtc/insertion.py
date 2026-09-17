@@ -75,6 +75,7 @@ class TerminalInsertion:
 
     def motion(self, name, group, target, *, cartesian=False, link=None, execute=True):
         from .mtc.task_builder import import_mtc_modules, create_motion_planners, _identity_ik_frame
+        from .mtc.path_length import terminal_path_length_cost
         _, core, stages = import_mtc_modules()
         attempts = int(self.config.get('planning_attempts', 10))
         for attempt in range(1, attempts+1):
@@ -94,6 +95,9 @@ class TerminalInsertion:
             if link:
                 move.ik_frame = _identity_ik_frame(link)
             move.setGoal(target)
+            move.setCostTerm(terminal_path_length_cost(
+                link or group.removesuffix('_arm')+'_hand_tcp', target,
+                float(self.config.get('max_path_length_ratio', 1.5)), name, group=group))
             move.timeout = float(self.config.get('planning_timeout_s', 15.))
             task.add(move)
             self.logger.info('%s planning attempt %d/%d', name, attempt, attempts)
@@ -144,6 +148,7 @@ class TerminalInsertion:
         from geometry_msgs.msg import Vector3Stamped, Vector3
         from std_msgs.msg import Header
         from .mtc.task_builder import create_motion_planners, _identity_ik_frame
+        from .mtc.path_length import terminal_path_length_cost
         attempts = int(self.config.get('planning_attempts', 10))
         for attempt in range(attempts):
             task = core.Task(); task.name = side+'_socket_withdraw'; task.loadRobotModel(self.node)
@@ -152,8 +157,11 @@ class TerminalInsertion:
             move = stages.MoveRelative('withdraw_open_'+side, cart)
             move.group = side+'_fr3_arm'; link = side+'_fr3_hand_tcp'
             move.ik_frame = _identity_ik_frame(link)
-            move.setDirection(Vector3Stamped(header=Header(frame_id=link),
-                vector=Vector3(z=-float(self.config.get('retreat_m', .05)))))
+            direction = Vector3Stamped(header=Header(frame_id=link),
+                vector=Vector3(z=-float(self.config.get('retreat_m', .05))))
+            move.setDirection(direction)
+            move.setCostTerm(terminal_path_length_cost(link, direction,
+                float(self.config.get('max_path_length_ratio', 1.5)), side+'_socket_withdraw'))
             task.add(move)
             if task.plan(1) and task.solutions:
                 break

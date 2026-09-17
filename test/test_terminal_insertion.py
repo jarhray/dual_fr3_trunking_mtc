@@ -26,6 +26,7 @@ def test_planning_retries_but_never_replays_failed_execution(monkeypatch, execut
     class Move:
         def __init__(self, *args): pass
         def setGoal(self, target): pass
+        def setCostTerm(self, callback): calls.append('path_length_gate')
     monkeypatch.setattr(task_builder, 'import_mtc_modules', lambda: (None,
         SimpleNamespace(Task=Task), SimpleNamespace(CurrentState=lambda name: name, MoveTo=Move)))
     monkeypatch.setattr(task_builder, 'create_motion_planners', lambda *args: (None, None, None))
@@ -41,6 +42,7 @@ def test_planning_retries_but_never_replays_failed_execution(monkeypatch, execut
     assert calls.count('new_measured_task') == 3
     assert calls.count('plan') == 3
     assert calls.count('execute') == 1
+    assert calls.count('path_length_gate') == 3
 
 
 def test_socket_installation_preserves_existing_collision_permissions():

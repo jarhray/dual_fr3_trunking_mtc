@@ -27,6 +27,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 from dual_fr3_maniskill.cable.backends import CABLE_SOLVERS
 from dual_fr3_moveit_config.moveit_resources import build_moveit_resources
+from dual_fr3_maniskill.launch_support import perception_arguments
 from dual_fr3_moveit_config.maniskill_resources import build_maniskill_resources
 from dual_fr3_trunking_mtc.runtime.config import (
     DEFAULTS,
@@ -334,6 +335,7 @@ def generate_launch_description():
             "use_rviz": LaunchConfiguration("use_rviz"),
             "gz_args": LaunchConfiguration("gz_args"),
             "gazebo_effort": LaunchConfiguration("gazebo_effort"),
+            **{name: LaunchConfiguration(name) for name in ("perception_enabled", "perception_python", "perception_config", "perception_checkpoint", "perception_camera_config", "perception_preview", "perception_device", "perception_save_dir")},
             "maniskill_python": LaunchConfiguration("maniskill_python"),
             "maniskill_viewer": LaunchConfiguration("maniskill_viewer"),
             "maniskill_scene": cable_scene,
@@ -544,6 +546,7 @@ def generate_launch_description():
             load_gripper,
             start_gripper,
             ee_id,
+            *perception_arguments(),
             use_rviz,
             simulation_backend,
             maniskill_python,

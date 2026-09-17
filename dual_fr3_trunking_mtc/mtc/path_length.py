@@ -127,3 +127,53 @@ def anchor_path_length_cost(link_name: str, target, ratio: float, stage_name: st
             return math.inf
 
     return cost
+
+
+def terminal_path_length_cost(link_name: str, target, ratio: float, stage_name: str, *, group=None):
+    """Apply the same dense TCP length gate to pose, named and relative goals.
+
+    Resolve named goals by FK from the requested SRDF state; resolve relative
+    goals from the actual start. Never use a failed/partial achieved endpoint
+    to enlarge the allowed distance.
+    """
+    from geometry_msgs.msg import PoseStamped, Vector3Stamped
+
+    validate_path_length_ratio(ratio)
+    if isinstance(target, PoseStamped):
+        return anchor_path_length_cost(link_name, target, ratio, stage_name)
+
+    def cost(solution, _comment=None):
+        try:
+            if solution.trajectory is None or len(solution.trajectory) == 0:
+                raise ValueError('terminal trajectory is empty')
+            first = copy.copy(solution.trajectory[0])
+            first.update()
+            scene = solution.start.scene
+            resolved = PoseStamped()
+            resolved.header.frame_id = first.robot_model.model_frame
+            resolved.pose.orientation.w = 1.0
+            if isinstance(target, str):
+                if not group:
+                    raise ValueError('Named goal requires an arm group')
+                goal = copy.copy(first)
+                if goal.set_to_default_values(group, target) is False:
+                    raise ValueError('Unknown named goal: '+target)
+                goal.update()
+                position = goal.get_global_link_transform(link_name)[:3, 3]
+            elif isinstance(target, Vector3Stamped):
+                if not scene.knows_frame_transform(first, target.header.frame_id):
+                    raise ValueError('Unknown relative-motion frame: '+target.header.frame_id)
+                rotation = scene.get_frame_transform(target.header.frame_id)[:3, :3]
+                vector = target.vector
+                position = first.get_global_link_transform(link_name)[:3, 3] + rotation @ np.array(
+                    [vector.x, vector.y, vector.z])
+            else:
+                raise ValueError('Unsupported terminal motion target')
+            resolved.pose.position.x, resolved.pose.position.y, resolved.pose.position.z = map(float, position)
+            return anchor_path_length_cost(link_name, resolved, ratio, stage_name)(solution)
+        except Exception as exc:
+            append_failure_comment(solution, f'PATH_LENGTH_CHECK_ERROR: {exc}')
+            LOGGER.exception('%s: terminal TCP path check failed: %s', stage_name, exc)
+            return math.inf
+
+    return cost

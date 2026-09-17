@@ -12,6 +12,7 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 from dual_fr3_trunking_mtc.mtc.path_length import (
     anchor_path_length_cost,
     tcp_path_length,
+    terminal_path_length_cost,
     validate_path_length_ratio,
 )
 from dual_fr3_trunking_mtc.mtc.cartesian_validation import (
@@ -48,6 +49,7 @@ def model(tmp_path):
     srdf.write_text('''<robot name="length_test">
       <group name="arm"><chain base_link="base" tip_link="tcp"/></group>
       <group name="peer"><joint name="peer_joint"/></group>
+      <group_state name="half_turn" group="arm"><joint name="joint" value="3.141592653589793"/></group_state>
     </robot>''')
     return robot_model.RobotModel(str(urdf), str(srdf))
 
@@ -324,5 +326,50 @@ def test_cache_matches_real_mtc_full_solution_and_captures_absolute_goal(model):
         assert goals["stage_1"].header.frame_id == "base"
         assert goals["stage_1"].pose.position.x == pytest.approx(math.cos(1.0))
         assert goals["stage_1"].pose.position.y == pytest.approx(math.sin(1.0))
+    finally:
+        rclcpp.shutdown()
+
+
+@pytest.mark.parametrize('kind', ['pose','named','relative'])
+@pytest.mark.parametrize('ratio,accepted', [(1.5,False),(2.,True)])
+def test_terminal_motion_goals_share_dense_tcp_path_gate(model, kind, ratio, accepted):
+    from geometry_msgs.msg import Vector3Stamped, Vector3
+    from std_msgs.msg import Header
+    targets = dict(pose=target_at(math.pi), named='half_turn',
+                   relative=Vector3Stamped(header=Header(frame_id='base'),vector=Vector3(x=-2.)))
+    solution = make_solution(model,[0.,math.pi])
+    callback = terminal_path_length_cost('tcp', targets[kind], ratio, 'terminal', group='arm')
+    assert math.isfinite(callback(solution)) is accepted
+    assert solution.trajectory[0].joint_positions['joint'] == 0.
+    assert solution.trajectory[len(solution.trajectory)-1].joint_positions['joint'] == math.pi
+
+
+def test_terminal_relative_goal_is_resolved_in_requested_frame(model):
+    from geometry_msgs.msg import Vector3Stamped, Vector3
+    from std_msgs.msg import Header
+    # target_frame rotates +90 degrees: local +Y is model -X.
+    target = Vector3Stamped(header=Header(frame_id='target_frame'),vector=Vector3(y=2.))
+    callback = terminal_path_length_cost('tcp',target,2.,'withdraw')
+    assert callback(make_solution(model,[0.,math.pi])) == pytest.approx(math.pi,abs=4e-6)
+
+
+@pytest.mark.parametrize('ratio,accepted',[(1.5,False),(2.,True)])
+def test_native_mtc_rejects_terminal_named_goal_detour_before_execution(model, ratio, accepted):
+    import rclcpp
+    from moveit.core.planning_scene import PlanningScene
+    from moveit.task_constructor import core, stages
+    rclcpp.init()
+    try:
+        task = core.Task(introspection=False)
+        task.setRobotModel(model)
+        scene = PlanningScene(model)
+        scene.current_state = make_trajectory(model,[0.])[0]
+        start = stages.FixedState('start'); start.setState(scene); task.add(start)
+        move = stages.MoveTo('terminal_return', core.JointInterpolationPlanner())
+        move.group = 'arm'; move.setGoal('half_turn')
+        move.setCostTerm(terminal_path_length_cost('tcp','half_turn',ratio,'terminal_return',group='arm'))
+        task.add(move)
+        assert bool(task.plan(1)) is accepted
+        assert bool(task.solutions) is accepted
     finally:
         rclcpp.shutdown()
