@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from geometry_msgs.msg import PoseStamped
 from moveit_msgs.msg import MoveItErrorCodes
 
-from ..gripper import GripperRequest
-from ..runtime.config import DEFAULTS
-from .planning import plan_with_retries
+from dual_fr3_trunking_mtc.execution.gripper import GripperRequest
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
+from dual_fr3_trunking_mtc.mtc.planning import plan_with_retries
 
 
 # Only terminal MoveIt failures with a known failed stage can be recovered.
@@ -84,11 +84,31 @@ def capture_relative_targets(cached):
     return targets
 
 
+def capture_anchor_joint_targets(cached):
+    """Keep the selected elbow/wrist branch when refreshing a measured grasp.
+
+    Replanning to a pose alone can select a different IK endpoint and destroy
+    the already verified continuation. Other recovery paths remain unchanged.
+    """
+    targets = {}
+    for item in cached:
+        spec = item.spec
+        if getattr(spec, 'primitive', '') not in (
+                'direct_move_to_next_anchor', 'direct_move_to_seat_edge_keypoint'):
+            continue
+        scene = item.solution.end.scene
+        names = scene.robot_model.get_joint_model_group(spec.group).active_joint_model_names
+        joints = scene.current_state.joint_positions
+        targets[spec.name] = {name: joints[name] for name in names}
+    return targets
+
+
 def execute_cached_solution(
     planned, node, task_plan, args, logger, gripper_controller=None,
     gripper_profiles=None, confirmation_callback=None,
     planner=plan_with_retries,
     cable_controller=None,
+    replan_after_grasp=False,
 ):
     """
     Execute exact cached trajectories, with bounded recovery after failure.
@@ -129,6 +149,12 @@ def execute_cached_solution(
                     )
                     return False
                 confirmed.add(spec.stage_index)
+                if cable_controller is not None:
+                    try:
+                        cable_controller.ensure_grasp()
+                    except Exception:
+                        logger.exception('USB grasp lost while waiting for confirmation; stopping')
+                        return False
             logger.info("executing cached stage [%02d] %s", spec.stage_index, spec.name)
             if spec.mtc_stage_type == "SimulationCable":
                 try:
@@ -138,6 +164,23 @@ def execute_cached_solution(
                 except Exception:
                     logger.exception("simulation USB operation raised; stopping before transport")
                     return False
+                if replan_after_grasp and spec.cable_operation == 'release_verify':
+                    # release_verify has just installed the measured attachment.
+                    # Replan the suffix before Enter, without repeating the grasp
+                    # or shifting any already selected Cartesian endpoint.
+                    remaining = tuple(entry.spec for entry in cached[index + 1:])
+                    logger.info('grasp released and verified; planning the remaining path from measured grasp')
+                    planned = planner(
+                        node, task_plan, remaining, args, logger,
+                        gripper_profiles=gripper_profiles, recovery_pose_goals=fixed_targets,
+                        preparation_joint_goals=fixed_preparation_goals,
+                        recovery_joint_goals=capture_anchor_joint_targets(cached[index + 1:]),
+                    )
+                    if planned is None:
+                        return False
+                    if getattr(args, 'publish_solution', DEFAULTS.publish_solution):
+                        planned.task.publish(planned.solution)
+                    break
                 continue
             if spec.mtc_stage_type == "GripperOperation":
                 try:

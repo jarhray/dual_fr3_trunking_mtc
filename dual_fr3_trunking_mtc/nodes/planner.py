@@ -12,11 +12,11 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import MarkerArray
 
-from .markers import build_marker_array
-from .models import TaskPlan, TaskStep
-from .planner import build_segment_plans, load_keypoints, plan_to_dict
-from .runtime.config import DEFAULTS
-from .scheduler import build_task_plan
+from dual_fr3_trunking_mtc.nodes.markers import build_marker_array
+from dual_fr3_trunking_mtc.task.models import TaskPlan, TaskStep
+from dual_fr3_trunking_mtc.task.planner import build_segment_plans, load_keypoints, plan_to_dict
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
+from dual_fr3_trunking_mtc.task.scheduler import build_task_plan
 
 
 class TrunkingPlannerNode(Node):

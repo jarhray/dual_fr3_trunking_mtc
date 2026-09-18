@@ -3,12 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dual_fr3_moveit_config.backends import (
-    DEFAULT_SIMULATION_BACKEND,
     SIMULATION_BACKENDS,
     resolve_simulation_backend,
 )
 
-from ..models import (
+from dual_fr3_trunking_mtc.task.models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
     DEFAULT_LEADER_ORIENTATION_DIRECTION,
@@ -29,7 +28,11 @@ class TrunkingDefaults:
     start_gripper: bool = True
     ee_id: str = "franka_hand"
     use_rviz: bool = True
-    simulation_backend: str = DEFAULT_SIMULATION_BACKEND
+    simulation_backend: str = "maniskill"
+    cable_solver: str = "rope_actor"
+    load_cable: bool = True
+    insertion_enabled: bool = True
+    run_insertion: bool = True
     gz_args: str = "empty.sdf -r"
     gazebo_effort: bool = False
 

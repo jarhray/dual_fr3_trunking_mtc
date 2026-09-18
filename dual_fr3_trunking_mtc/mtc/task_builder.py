@@ -9,8 +9,8 @@ from moveit_msgs.msg import Constraints, PositionConstraint
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
 
-from ..gripper import GripperProfileRegistry, GripperRequest
-from ..models import (
+from dual_fr3_trunking_mtc.execution.gripper import GripperProfileRegistry, GripperRequest
+from dual_fr3_trunking_mtc.task.models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
     DEFAULT_LEADER_ORIENTATION_DIRECTION,
@@ -20,11 +20,14 @@ from ..models import (
     TaskPlan,
     rpy_to_quaternion,
 )
-from ..runtime.config import DEFAULTS
-from ..stages.compiler import build_mtc_stage_specs, finger_joint_for_ik_frame
-from ..stages.specs import MtcStageSpec
-from .path_length import anchor_path_length_cost, validate_path_length_ratio
-from .cartesian_validation import (
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
+from dual_fr3_trunking_mtc.stages.compiler import build_mtc_stage_specs, finger_joint_for_ik_frame
+from dual_fr3_trunking_mtc.stages.specs import MtcStageSpec
+from dual_fr3_trunking_mtc.mtc.path_length import (
+    anchor_path_length_cost,
+    validate_path_length_ratio,
+)
+from dual_fr3_trunking_mtc.mtc.cartesian_validation import (
     cartesian_path_cost,
     merged_cartesian_path_cost,
     validate_cartesian_settings,
@@ -207,6 +210,7 @@ def create_mtc_task(
     cartesian_path_tolerance: float = DEFAULTS.cartesian_path_tolerance,
     preparation_joint_goals: dict[str, dict[str, float]] | None = None,
     start_scene=None,
+    recovery_joint_goals: dict[str, dict[str, float]] | None = None,
 ):
     validate_path_length_ratio(anchor_max_path_length_ratio)
     validate_cartesian_settings(cartesian_jump_threshold, cartesian_path_tolerance)
@@ -214,6 +218,7 @@ def create_mtc_task(
     keypoints = task_plan.keypoints
     recovery_pose_goals = recovery_pose_goals or {}
     preparation_joint_goals = preparation_joint_goals or {}
+    recovery_joint_goals = recovery_joint_goals or {}
 
     cartesian, jointspace, ompl = create_motion_planners(
         core,
@@ -381,7 +386,8 @@ def create_mtc_task(
                     tool_pitch,
                     spec.target_yaw,
                 )
-                move_to.setGoal(target)
+                move_to.setGoal(dict(recovery_joint_goals[spec.name])
+                                if spec.name in recovery_joint_goals else target)
                 if spec.primitive == "direct_move_to_next_anchor":
                     move_to.setCostTerm(
                         anchor_path_length_cost(

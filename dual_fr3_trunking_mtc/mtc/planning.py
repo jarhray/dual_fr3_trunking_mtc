@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass, field
 
-from ..runtime.config import DEFAULTS
-from .diagnostics import PlanningFailureHistory, log_planning_failure
-from .task_builder import create_mtc_task
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
+from dual_fr3_trunking_mtc.mtc.diagnostics import PlanningFailureHistory, log_planning_failure
+from dual_fr3_trunking_mtc.mtc.task_builder import create_mtc_task
 
 
 @dataclass
@@ -23,6 +23,7 @@ def create_task_from_args(
     selected_stage_indices=None, recovery_pose_goals=None,
     task_factory=create_mtc_task,
     preparation_joint_goals=None, start_scene=None,
+    recovery_joint_goals=None,
 ):
     return task_factory(
         node, task_plan, specs,
@@ -51,6 +52,7 @@ def create_task_from_args(
         recovery_pose_goals=recovery_pose_goals,
         preparation_joint_goals=preparation_joint_goals,
         start_scene=start_scene,
+        recovery_joint_goals=recovery_joint_goals,
     )
 
 
@@ -59,6 +61,8 @@ def plan_with_retries(
     selected_stage_indices=None, recovery_pose_goals=None,
     task_factory=create_mtc_task,
     preparation_joint_goals=None,
+    solution_validator=None,
+    recovery_joint_goals=None,
 ):
     attempts = getattr(args, "planning_attempts", DEFAULTS.planning_attempts)
     if attempts < 1:
@@ -74,6 +78,7 @@ def plan_with_retries(
                 node, task_plan, specs, args, gripper_profiles,
                 selected_stage_indices, recovery_pose_goals, task_factory,
                 preparation_joint_goals=preparation_joint_goals,
+                recovery_joint_goals=recovery_joint_goals,
             )
             succeeded = task.plan()
         except Exception:  # noqa: BLE001 - configuration/binding errors are not retryable
@@ -81,11 +86,15 @@ def plan_with_retries(
             return None
         if succeeded and task.solutions:
             solution = task.solutions[0]
+            planned = PlannedTask(task, solution, specs, preparation_joint_goals or {})
+            if solution_validator is not None and not solution_validator(planned):
+                logger.warning('transport solution rejected: terminal continuation is not plannable')
+                continue
             logger.info(
                 "planning succeeded on attempt %d/%d; retaining this solution",
                 attempt, attempts,
             )
-            return PlannedTask(task, solution, specs, preparation_joint_goals or {})
+            return planned
         logger.warning("planning attempt %d/%d produced no valid solution", attempt, attempts)
         log_planning_failure(
             task, specs, logger, task_plan=task_plan, args=args,

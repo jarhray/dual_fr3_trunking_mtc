@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Sequence
 import yaml
 from geometry_msgs.msg import PoseStamped
 
-from .models import (
+from dual_fr3_trunking_mtc.task.models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_ORIENTATION_DIRECTION,
     DEFAULT_TOOL_PITCH,

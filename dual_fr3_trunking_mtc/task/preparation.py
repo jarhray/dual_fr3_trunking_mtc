@@ -4,17 +4,17 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Sequence
 
-from .models import (
+from dual_fr3_trunking_mtc.task.models import (
     Keypoint,
     TaskPlan,
     path_orientation_yaw,
     validate_orientation_direction,
     rpy_to_quaternion,
 )
-from .runtime.config import DEFAULTS
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
 
 if TYPE_CHECKING:
-    from .stages.specs import MtcStageSpec
+    from dual_fr3_trunking_mtc.stages.specs import MtcStageSpec
 
 
 LEADER_APPROACH = "leader_move_above_initial_keypoint"
@@ -115,7 +115,7 @@ def build_preparation_stage_specs(
     start_stage_index: int = 0,
 ) -> list[MtcStageSpec]:
     """Compile preparation into the same stage-spec IR as the formal task."""
-    from .stages.specs import MtcStageSpec
+    from dual_fr3_trunking_mtc.stages.specs import MtcStageSpec
 
     _validate_config(task_plan, config)
     keypoints = task_plan.keypoints
@@ -258,7 +258,7 @@ def build_preparation_stage_specs(
                 gripper_action=("grasp" if actor == "leader" else "move") if config.simulation_cable_config else "",
                 gripper_width_override=cable_widths.get(actor),
                 phase="preparation",
-                confirmation_required=config.interactive,
+                confirmation_required=config.interactive and not config.simulation_cable_config,
                 info=f"close {actor} gripper",
             )
         )
@@ -321,6 +321,8 @@ def build_preparation_stage_specs(
             confirmation_required=config.interactive,
             children=tuple(child_specs),
             info=(
+                ("Grasp verified and world support removed; start the task: "
+                 if config.simulation_cable_config else "Start the task: ") +
                 f"move both TCPs down {height:.3f} m on synchronized "
                 "Cartesian paths"
             ),

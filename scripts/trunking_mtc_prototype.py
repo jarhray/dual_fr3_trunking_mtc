@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from dual_fr3_trunking_mtc.mtc_prototype import main
+from dual_fr3_trunking_mtc.nodes.prototype import main
 
 
 if __name__ == "__main__":

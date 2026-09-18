@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Sequence
 
-from ..models import DEFAULT_LEADER_ORIENTATION_DIRECTION
+from dual_fr3_trunking_mtc.task.models import DEFAULT_LEADER_ORIENTATION_DIRECTION
 
 
 @dataclass(frozen=True)

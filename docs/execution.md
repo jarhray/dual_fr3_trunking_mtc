@@ -18,7 +18,7 @@
 | `plan:=true execute:=false` | 完整规划预检，不运动 |
 | `plan:=true execute:=true` | 规划成功后执行，当前默认模式 |
 
-准备阶段的上方定位会自动执行，交互确认只发生在两次闭合和下降之前。按 Enter 继续、输入 `q` 中止；`preparation_interactive:=false` 跳过这些确认，适用于自动仿真。
+ManiSkill 接触夹持准备自动定位并闭爪；随后 解除世界固定、验证抓持、以实测抓姿完成剩余路径预检后，在下降前只等待一次 Enter。按 Enter 开始任务、输入 `q` 中止；`preparation_interactive:=false` 跳过确认，适用于自动仿真。其他后端保留原闭合前确认。
 
 ManiSkill USB 场景在机械臂接近前按关键点准备目标 `spawn` 并固定，随后张开接近，闭合动作结束后仍须通过持续双指接触、解除世界定位、释放后稳定验证，才能提交规划附着和搬运。`load_cable:=false` 不创建线缆，但保留双臂准备、夹持验证、下降及原正式 MTC 运动，用于 USB 搬运调试，不代表完成线缆布线。详见[接口与状态](../../dual_fr3_maniskill/docs/mtc_cable.md)。
 

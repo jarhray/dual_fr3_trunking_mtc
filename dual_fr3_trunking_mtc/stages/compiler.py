@@ -4,7 +4,7 @@ import math
 from dataclasses import replace
 from typing import Any, Dict, Sequence
 
-from ..models import (
+from dual_fr3_trunking_mtc.task.models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
     DEFAULT_LEADER_ORIENTATION_DIRECTION,
@@ -15,8 +15,8 @@ from ..models import (
     path_orientation_yaw,
     validate_orientation_direction,
 )
-from ..preparation import PreparationConfig, build_preparation_stage_specs
-from .specs import MtcStageSpec
+from dual_fr3_trunking_mtc.task.preparation import PreparationConfig, build_preparation_stage_specs
+from dual_fr3_trunking_mtc.stages.specs import MtcStageSpec
 
 
 def _index_pair_for_step(step: TaskStep) -> tuple[str, int | None, int | None]:

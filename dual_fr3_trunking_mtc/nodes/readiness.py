@@ -13,8 +13,11 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-from .gripper import gripper_command_action_name, resolve_gripper_backend
-from .runtime.config import DEFAULTS
+from dual_fr3_trunking_mtc.execution.gripper import (
+    gripper_command_action_name,
+    resolve_gripper_backend,
+)
+from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
 
 
 ARM_SIDES = ("left", "right")

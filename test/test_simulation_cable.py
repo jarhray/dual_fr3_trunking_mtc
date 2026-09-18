@@ -55,6 +55,7 @@ def test_spawn_precedes_contact_closure_and_verification_precedes_transport():
     assert specs[7].cable_operation == "release_verify"
     assert [s.stage_index for s in specs] == list(range(9))
     assert all(s.stage_index == 8 for s in specs[-1].children)
+    assert [s.stage_index for s in specs if s.confirmation_required] == [8]
 
 
 def test_usb_only_preserves_both_arm_preparation_and_original_motion_stages():
@@ -125,7 +126,7 @@ def test_physical_verification_precedes_planning_attachment(operation, expected)
                 assert attached[0].object.mesh_poses[0].position.x == .001
                 assert attached[0].object.mesh_poses[0].position.z == .0121
         return NS(message="ok")
-    controller = NS(apply=apply, prepare="prepare", spawn="spawn", release="release", verify="verify", status="status", _call=call,
+    controller = controller_stub(apply=apply, prepare="prepare", spawn="spawn", release="release", verify="verify", status="status", _call=call,
                     node=NS(get_logger=lambda: NS(info=lambda _: None)))
     spec = next(s for s in cable_specs() if s.mtc_stage_type == "SimulationCable" and s.cable_operation == operation)
     assert SimulationCableController.execute(controller, spec)
@@ -145,7 +146,7 @@ def test_repeated_spawn_uses_stationary_usb_world_observation_after_tcp_moves():
         if client is apply:
             scenes.append(request.scene)
         return NS(success=True, message="USB already created; unchanged")
-    controller = NS(apply=apply, prepare="prepare", spawn="spawn", status="status", _call=call,
+    controller = controller_stub(apply=apply, prepare="prepare", spawn="spawn", status="status", _call=call,
                     node=NS(get_logger=lambda: NS(info=lambda _: None)))
     spec = next(s for s in cable_specs() if s.mtc_stage_type == "SimulationCable" and s.cable_operation == "spawn")
     SimulationCableController.execute(controller, spec)
@@ -168,7 +169,7 @@ def test_invalid_spawn_observation_does_not_change_planning_scene(world_pose):
     def call(client, request, **kwargs):
         calls.append(client)
         return NS(message=json.dumps(dict(world_pose=world_pose)) if client == "status" else "created")
-    controller = NS(apply=apply, prepare="prepare", spawn="spawn", status="status", _call=call,
+    controller = controller_stub(apply=apply, prepare="prepare", spawn="spawn", status="status", _call=call,
                     node=NS(get_logger=lambda: NS(info=lambda _: None)))
     spec = next(s for s in cable_specs() if s.mtc_stage_type == "SimulationCable" and s.cable_operation == "spawn")
     with pytest.raises(RuntimeError):
@@ -193,7 +194,7 @@ def test_verification_followed_by_invalid_status_never_attaches(invalid):
     def call(client, request, **kwargs):
         calls.append(client)
         return NS(message=json.dumps(snapshot) if client == "status" else "ok")
-    controller = NS(apply=apply, release="release", verify="verify", status="status", _call=call,
+    controller = controller_stub(apply=apply, release="release", verify="verify", status="status", _call=call,
                     node=NS(get_logger=lambda: NS(info=lambda _: None)))
     spec = next(s for s in cable_specs() if s.cable_operation == "release_verify")
     with pytest.raises(RuntimeError):
@@ -211,7 +212,7 @@ def test_contact_or_verification_failure_never_attaches_in_planning(failed):
         if client == failed:
             raise RuntimeError("insufficient contact or unstable grasp")
         return NS(message="ok")
-    controller = NS(apply=apply, release="release", verify="verify", _call=call,
+    controller = controller_stub(apply=apply, release="release", verify="verify", _call=call,
                     node=NS(get_logger=lambda: NS(info=lambda _: None)))
     spec = next(s for s in cable_specs() if s.cable_operation == "release_verify")
     with pytest.raises(RuntimeError, match="unstable grasp"):
@@ -300,3 +301,11 @@ def test_preposition_planning_object_uses_target_frame_instead_of_live_tcp():
     p = obj.mesh_poses[0].position
     # roll=pi: local +Z is downward; default USB grip is 12 mm below TCP.
     assert [p.x, p.y, p.z] == pytest.approx([*target["position_m"][:2], target["position_m"][2]-.012])
+
+
+def controller_stub(**attributes):
+    """Use the real method dispatch with service/ROS state replaced by fakes."""
+    from dual_fr3_trunking_mtc.simulation_cable import SimulationCableController
+    controller = SimulationCableController.__new__(SimulationCableController)
+    controller.__dict__.update(attributes)
+    return controller

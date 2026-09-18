@@ -11,12 +11,13 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, SIMULATION_BACKENDS, launch_default
+from dual_fr3_moveit_config.backends import DEFAULT_SIMULATION_BACKEND
 
 
 def generate_launch_description():
     simulation_backend = DeclareLaunchArgument(
         "simulation_backend",
-        default_value=DEFAULTS.simulation_backend,
+        default_value=DEFAULT_SIMULATION_BACKEND,
         choices=SIMULATION_BACKENDS,
     )
     fake_sensor_commands = DeclareLaunchArgument(

@@ -5,7 +5,7 @@ from typing import Sequence
 
 from std_msgs.msg import String
 
-from ..stages.specs import (
+from dual_fr3_trunking_mtc.stages.specs import (
     MtcStageSpec,
     mtc_stage_sequence_to_json,
     mtc_stage_sequence_to_text,

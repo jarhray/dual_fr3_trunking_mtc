@@ -23,8 +23,11 @@ def explain_cost_failure(solution, spec, task_plan, args):
     """
     if solution.comment or args is None or getattr(solution, "trajectory", None) is None:
         return
-    from .cartesian_validation import cartesian_path_cost, merged_cartesian_path_cost
-    from .path_length import anchor_path_length_cost
+    from dual_fr3_trunking_mtc.mtc.cartesian_validation import (
+        cartesian_path_cost,
+        merged_cartesian_path_cost,
+    )
+    from dual_fr3_trunking_mtc.mtc.path_length import anchor_path_length_cost
 
     if getattr(spec, "primitive", "") == "direct_move_to_next_anchor" and task_plan is not None:
         from geometry_msgs.msg import PoseStamped

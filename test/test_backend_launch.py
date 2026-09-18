@@ -36,11 +36,16 @@ def apply_arguments(description, context):
     ("dual_fr3_trunking_mtc", "demo.launch.py"),
     ("dual_fr3_trunking_mtc", "mtc_prototype.launch.py"),
 ])
-def test_launch_defaults_to_gazebo_with_one_backend_selector(package, filename):
+def test_launch_defaults_with_one_backend_selector(package, filename):
     description = load_launch(package, filename)
     context = LaunchContext()
     apply_arguments(description, context)
-    assert context.launch_configurations["simulation_backend"] == "gazebo"
+    expected = 'maniskill' if filename == 'mtc_prototype.launch.py' else 'gazebo'
+    assert context.launch_configurations['simulation_backend'] == expected
+    if filename == 'mtc_prototype.launch.py':
+        assert context.launch_configurations['cable_solver'] == 'rope_actor'
+        for name in ('load_cable', 'execute', 'insertion_enabled', 'run_insertion'):
+            assert context.launch_configurations[name] == 'true'
     assert "use_gazebo" not in context.launch_configurations
     assert "use_fake_hardware" not in context.launch_configurations
     context.launch_configurations["simulation_backend"] = "auto"
@@ -127,3 +132,45 @@ def test_mtc_forwards_leader_orientation_to_maniskill(direction):
     include, = [a for a in description.entities if isinstance(a, IncludeLaunchDescription)]
     value = dict(include.launch_arguments)["leader_orientation_direction"]
     assert perform_substitutions(context, normalize_to_list_of_substitutions(value)) == direction
+
+
+@pytest.mark.parametrize('backend,enabled,expected', [
+    ('maniskill', 'true', 'true'), ('maniskill', 'false', 'false'),
+    ('gazebo', 'true', 'false'), ('real', 'true', 'false'), ('fake', 'true', 'false'),
+])
+def test_insertion_default_respects_backend_and_explicit_override(backend, enabled, expected):
+    description = load_launch('dual_fr3_trunking_mtc', 'mtc_prototype.launch.py')
+    context = LaunchContext()
+    context.launch_configurations.update(simulation_backend=backend, maniskill_cable=enabled)
+    apply_arguments(description, context)
+    assert context.launch_configurations['insertion_enabled'] == expected
+    context.launch_configurations['insertion_enabled'] = 'false'
+    apply_arguments(description, context)
+    assert context.launch_configurations['insertion_enabled'] == 'false'
+
+
+def test_standalone_launch_contains_only_skill_node():
+    from launch.actions import OpaqueFunction
+    from launch_ros.actions import Node
+
+    description = load_launch('dual_fr3_trunking_mtc', 'insertion_skill.launch.py')
+    context = LaunchContext()
+    apply_arguments(description, context)
+    factory, = [item for item in description.entities if isinstance(item, OpaqueFunction)]
+    node, = factory.execute(context)
+    assert isinstance(node, Node)
+    assert not any(isinstance(item, IncludeLaunchDescription) for item in description.entities)
+
+
+def test_mtc_defaults_match_recommended_explicit_command():
+    import os
+    description = load_launch('dual_fr3_trunking_mtc', 'mtc_prototype.launch.py')
+    implicit, explicit = LaunchContext(), LaunchContext()
+    # Respect the documented MANISKILL_PYTHON override when present.
+    python = os.environ.get('MANISKILL_PYTHON', str(Path.cwd() / '.venv/bin/python'))
+    explicit.launch_configurations.update(
+        simulation_backend='maniskill', cable_solver='rope_actor',
+        load_cable='true', execute='true', maniskill_python=python)
+    apply_arguments(description, implicit)
+    apply_arguments(description, explicit)
+    assert implicit.launch_configurations == explicit.launch_configurations

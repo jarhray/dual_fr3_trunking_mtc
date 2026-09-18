@@ -4,11 +4,15 @@ import argparse
 import logging
 from typing import Callable, Sequence
 
-from ..gripper import GripperController, GripperProfileRegistry, GripperRequest
-from ..models import TaskPlan
-from ..stages.specs import MtcStageSpec
-from .task_builder import create_mtc_task
-from .planning import plan_with_retries
+from dual_fr3_trunking_mtc.execution.gripper import (
+    GripperController,
+    GripperProfileRegistry,
+    GripperRequest,
+)
+from dual_fr3_trunking_mtc.task.models import TaskPlan
+from dual_fr3_trunking_mtc.stages.specs import MtcStageSpec
+from dual_fr3_trunking_mtc.mtc.task_builder import create_mtc_task
+from dual_fr3_trunking_mtc.mtc.planning import plan_with_retries
 
 
 def execute_stage_by_stage(

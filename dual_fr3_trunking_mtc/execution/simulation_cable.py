@@ -78,7 +78,7 @@ class SimulationCableController:
         return response
 
     def execute(self, spec):
-        from dual_fr3_maniskill.cable.planning_scene import attached_usb_scene, usb_collision_object
+        from dual_fr3_maniskill.cable.planning_scene import usb_collision_object
         from moveit_msgs.msg import AttachedCollisionObject, CollisionObject, PlanningScene
         from dual_fr3_maniskill.cable.model import USB_LINK
         if not self.apply.wait_for_service(timeout_sec=5.):
@@ -114,18 +114,28 @@ class SimulationCableController:
             for client in (self.release, self.verify):
                 response = self._call(client, Trigger.Request())
                 self.node.get_logger().info(response.message)
-            # This is a planning representation, never a physical TCP weld.
-            scene = attached_usb_scene(spec.cable_config,
-                orientation_direction=spec.cable_orientation_direction)
-            snapshot = json.loads(self._call(self.status, Trigger.Request()).message)
-            obj = scene.robot_state.attached_collision_objects[0].object
-            if (not isinstance(snapshot, dict) or snapshot.get("state") != "stable" or
-                    snapshot.get("external_support") is not False or
-                    snapshot.get("relative_frame") != obj.header.frame_id):
-                raise RuntimeError("USB status no longer confirms a released stable grasp; refusing attachment")
-            obj.mesh_poses = [_observed_pose(snapshot, "relative_pose")]
+            return self.sync_grasp(spec.cable_config, spec.cable_orientation_direction)
         else:
             raise ValueError(f"Unknown simulation USB operation: {spec.cable_operation}")
+        self._call(self.apply, ApplyPlanningScene.Request(scene=scene))
+        return True
+
+    def sync_grasp(self, config_path, orientation_direction='forward'):
+        """Update the planning attachment from an already released, stable grasp.
+
+        Also used by the independent insertion skill; never creates a physical
+        support, respawns the object or closes a gripper.
+        """
+        from dual_fr3_maniskill.cable.planning_scene import attached_usb_scene
+
+        scene = attached_usb_scene(config_path, orientation_direction=orientation_direction)
+        snapshot = json.loads(self._call(self.status, Trigger.Request()).message)
+        obj = scene.robot_state.attached_collision_objects[0].object
+        if (not isinstance(snapshot, dict) or snapshot.get('state') != 'stable' or
+                snapshot.get('external_support') is not False or
+                snapshot.get('relative_frame') != obj.header.frame_id):
+            raise RuntimeError('USB status no longer confirms a released stable grasp; refusing attachment')
+        obj.mesh_poses = [_observed_pose(snapshot, 'relative_pose')]
         self._call(self.apply, ApplyPlanningScene.Request(scene=scene))
         return True
 

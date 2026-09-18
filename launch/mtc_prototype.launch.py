@@ -27,7 +27,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 from dual_fr3_maniskill.cable.backends import CABLE_SOLVERS
 from dual_fr3_moveit_config.moveit_resources import build_moveit_resources
-from dual_fr3_maniskill.launch_support import perception_arguments
+from dual_fr3_maniskill.ros.launch import perception_arguments
 from dual_fr3_moveit_config.maniskill_resources import build_maniskill_resources
 from dual_fr3_trunking_mtc.runtime.config import (
     DEFAULTS,
@@ -61,7 +61,7 @@ def generate_launch_description():
         "simulation_backend",
         DEFAULTS.simulation_backend,
         choices=SIMULATION_BACKENDS,
-        description="Robot execution backend (default: gazebo)",
+        description="Robot execution backend (default: maniskill)",
     )
     maniskill_python = declare_argument(
         "maniskill_python",
@@ -73,16 +73,23 @@ def generate_launch_description():
         True,
         description="Enable the ManiSkill USB contact-grasp preparation scene",
     )
-    insertion_enabled = declare_argument("insertion_enabled", True)
+    insertion_enabled = DeclareLaunchArgument(
+        'insertion_enabled', default_value=PythonExpression([
+            f"'{launch_default(DEFAULTS.insertion_enabled)}' if '", LaunchConfiguration('simulation_backend'),
+            "' == 'maniskill' and '", LaunchConfiguration('maniskill_cable'),
+            "'.lower() in ('true', '1', 'yes', 'on') else 'false'",
+        ]))
+    run_insertion = declare_argument('run_insertion', DEFAULTS.run_insertion,
+        description='Invoke terminal insertion after transport; false leaves the scene for insertion_skill.launch.py')
     load_cable = declare_argument(
         "load_cable",
-        True,
+        DEFAULTS.load_cable,
         choices=("true", "false"),
         description="false: omit cable physics, retain original dual-arm MTC trajectories for USB grasp debugging",
     )
     cable_solver = declare_argument(
         "cable_solver",
-        "mpm",
+        DEFAULTS.cable_solver,
         choices=CABLE_SOLVERS,
         description="ManiSkill cable model: MPM or PhysX Rope-Actor capsule chain",
     )
@@ -364,6 +371,8 @@ def generate_launch_description():
         LaunchConfiguration("load_cable"),
         "--insertion-enabled",
         LaunchConfiguration("insertion_enabled"),
+        '--run-insertion',
+        LaunchConfiguration('run_insertion'),
         "--cable-config",
         LaunchConfiguration("cable_config"),
         "--simulation-backend",
@@ -554,6 +563,7 @@ def generate_launch_description():
             maniskill_cable,
             load_cable,
             insertion_enabled,
+            run_insertion,
             cable_config,
             cable_solver,
             cable_trace_dir,

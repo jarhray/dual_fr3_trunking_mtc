@@ -135,6 +135,24 @@ def test_failed_continuations_visit_all_pairs_before_retrying():
     assert calls[:4] == calls[4:]
 
 
+def test_terminal_continuation_rejection_selects_another_preparation_pair():
+    calls = []
+
+    def validator(planned):
+        calls.append(planned.preparation_joint_goals)
+        return len(calls) == 3
+
+    result = search.plan_preparation_candidates(
+        None, TASK_PLAN, task_specs(), search_args(planning_attempts=2), LOGGER,
+        scene_provider=lambda _: search.CapturedScene(scene(), None),
+        sampler=fake_sampler, task_factory=lambda *a, **kw: (Task(True), None),
+        solution_validator=validator,
+    )
+    assert result is not None and len(calls) == 3
+    assert calls[0] == calls[1] and calls[1] != calls[2]
+    assert result.preparation_joint_goals == calls[2]
+
+
 def test_pipeline_failure_retries_same_candidate_until_complete_success():
     specs, calls = task_specs(), []
     specs[2].planner = "PipelinePlanner"

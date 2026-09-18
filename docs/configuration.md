@@ -2,6 +2,9 @@
 
 启动和构建见 [README](../README.md)。本页说明关键点和 `mtc_prototype.launch.py` 的主要参数，默认值来自 [runtime/config.py](../dual_fr3_trunking_mtc/runtime/config.py)。
 
+末端插入另读 `cable_config` 的 `insertion` 段；它的 planning_attempts、速度比例和路径约束独立于主 MTC。
+修改孔尺寸、反馈/成功阈值或失败处理前，先查看 [插入参数与覆盖关系](../../dual_fr3_maniskill/docs/insertion_parameters.md)。
+
 ## 关键点与坐标
 
 先复制 [keypoints.yaml](../config/keypoints.yaml)，再通过 `keypoints_file:=/绝对路径/keypoints.yaml` 加载。配置格式示例：
@@ -50,7 +53,7 @@ keypoints:
 | `leader_ik_frame` / `follower_ik_frame` | `left_fr3_hand_tcp` / `right_fr3_hand_tcp` | 目标 TCP |
 | `preparation_enabled` | `true` | 编译准备阶段 |
 | `preparation_height` | `0.05` m | 初始关键点上方偏移及同步下降距离 |
-| `preparation_interactive` | `true` | 两次闭合和下降前确认 |
+| `preparation_interactive` | `true` | ManiSkill 解除固定、实测路径预检通过后，下降前一次确认；其他后端保留原闭爪确认 |
 | `preparation_leader_gripper_profile` | `cable_tip` | leader 准备夹持配置 |
 | `preparation_follower_gripper_profile` | `cable_body` | follower 准备夹持配置 |
 
@@ -60,7 +63,7 @@ keypoints:
 
 `gripper_profiles_file` 默认指向 [gripper_profiles.yaml](../config/gripper_profiles.yaml)。`width` 始终是两指**总开口**，单位米；`speed` 单位 m/s，`force` 单位 N。配置提供 `move`、`grasp` 和 `hold` 动作，所有覆盖值都受 `safety` 限制。
 
-默认 `cable_tip` 使用 `grasp`，开口 0.005 m、速度 0.02 m/s、力 10 N；`cable_body` 使用 `grasp`，开口 0 m、速度 0.02 m/s、力 12 N。这些是联调初值，真机需按实际工件标定。
+默认 `cable_tip` 使用 `grasp`，开口 0.0045 m、速度 0.02 m/s、力 10 N；`cable_body` 使用 `grasp`，开口 0 m、速度 0.02 m/s、力 12 N。这些是联调初值，真机需按实际工件标定。
 
 要在某个 `seat_edge` 目标点插入夹爪动作，在该点加入：
 
@@ -109,3 +112,5 @@ metadata:
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py --show-args
 ```
+
+完整参数逐项作用、消费文件与验证见 [参数索引](parameters.md)，各入口真实声明值见 [默认值来源](parameter_defaults.md)。

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
-from .models import Keypoint, SegmentPlan, TaskPlan, TaskStep
+from dual_fr3_trunking_mtc.task.models import Keypoint, SegmentPlan, TaskPlan, TaskStep
 
 
 SUPPORTED_SEGMENT_ACTIONS = {"straighten", "seat_edge"}

@@ -6,7 +6,7 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
-from .models import Keypoint, SegmentPlan
+from dual_fr3_trunking_mtc.task.models import Keypoint, SegmentPlan
 
 
 def _color(r: float, g: float, b: float, a: float = 1.0) -> ColorRGBA:

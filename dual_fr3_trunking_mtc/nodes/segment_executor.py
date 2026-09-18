@@ -15,7 +15,7 @@ from control_msgs.msg import JointTrajectoryControllerState
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import PlanningOptions
 
-from .models import (
+from dual_fr3_trunking_mtc.task.models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
     DEFAULT_LEADER_ORIENTATION_DIRECTION,
@@ -24,10 +24,10 @@ from .models import (
     Keypoint,
     ORIENTATION_DIRECTIONS,
 )
-from .planner import build_segment_plans, load_keypoints
-from .scheduler import build_task_plan
-from .stages.compiler import build_mtc_stage_specs
-from .stages.specs import MtcStageSpec
+from dual_fr3_trunking_mtc.task.planner import build_segment_plans, load_keypoints
+from dual_fr3_trunking_mtc.task.scheduler import build_task_plan
+from dual_fr3_trunking_mtc.stages.compiler import build_mtc_stage_specs
+from dual_fr3_trunking_mtc.stages.specs import MtcStageSpec
 
 
 ARM_FOR_ACTOR = {"leader": "left", "follower": "right"}
@@ -500,7 +500,7 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
             get_package_share_directory("dual_fr3_trunking_mtc")
         )
     except PackageNotFoundError:
-        package_directory = Path(__file__).resolve().parents[1]
+        package_directory = Path(__file__).resolve().parents[2]
     default_keypoints = package_directory / "config" / "keypoints.yaml"
     parser = argparse.ArgumentParser(
         description=(

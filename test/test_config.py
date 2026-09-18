@@ -9,7 +9,9 @@ from dual_fr3_trunking_mtc.runtime.config import DEFAULTS, launch_default, resol
 def test_cli_defaults_are_sourced_from_runtime_config():
     args = _parse_args([])
 
-    assert args.simulation_backend == DEFAULTS.simulation_backend == "gazebo"
+    assert args.simulation_backend == DEFAULTS.simulation_backend == "maniskill"
+    assert args.insertion_enabled and args.load_cable and args.execute
+    assert DEFAULTS.cable_solver == 'rope_actor'
     assert not hasattr(args, "use_fake_hardware")
     assert not hasattr(args, "use_gazebo")
     assert args.task_frame == DEFAULTS.task_frame

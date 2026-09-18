@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 
-from .diagnostics import append_failure_comment
+from dual_fr3_trunking_mtc.mtc.diagnostics import append_failure_comment
 
 
 LOGGER = logging.getLogger(__name__)

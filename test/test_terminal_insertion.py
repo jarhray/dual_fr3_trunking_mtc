@@ -90,6 +90,7 @@ def test_right_returns_before_insertion_and_left_releases_only_after_retention(f
         events.append(name)
         if name == failure: raise RuntimeError('injected execution failure')
     obj.motion = motion
+    obj.approach_plan = SimpleNamespace(execute=motion)
     obj.withdraw = lambda side: events.append('withdraw_'+side)
     obj.detach_measured_usb = lambda status: events.append('detach_usb')
     def gripper(request):
@@ -109,3 +110,80 @@ def test_right_returns_before_insertion_and_left_releases_only_after_retention(f
         else:
             assert events.index('retained') < events.index('open_left') < events.index('withdraw_left') < events.index('left_return_ready') < events.index('returned')
             assert events.count('open_right') == events.count('right_return_ready') == 1
+
+
+@pytest.mark.parametrize('failure', ['detach', 'open_left', 'released', 'withdraw_left',
+                                   'restore', 'left_return_ready', 'returned'])
+def test_left_failure_reports_phase_cancels_and_restores_permissions(failure):
+    from moveit_msgs.msg import AllowedCollisionMatrix
+
+    events = []
+    obj = TerminalInsertion.__new__(TerminalInsertion)
+    obj.config = {}
+    obj.saved_acm = None
+    saved = AllowedCollisionMatrix()
+    obj.logger = SimpleNamespace(info=lambda *a: None, error=lambda *a: None, exception=lambda *a: None)
+
+    def event(name):
+        events.append(name)
+        if name == failure:
+            raise RuntimeError('injected ' + name)
+
+    def command(operation):
+        event(operation)
+        return dict(return_complete=False, state='not_started')
+
+    obj.command = command
+    obj.release_right = lambda controller: None
+    obj.approach_plan = object()
+    obj.return_right = lambda: None
+    obj.align_left = lambda: None
+    obj.feedback_insert = lambda: None
+
+    def detach(status):
+        obj.saved_acm = saved
+        event('detach')
+
+    obj.detach_measured_usb = detach
+    obj.open_gripper = lambda controller, side: event('open_' + side)
+    obj.withdraw = lambda side: event('withdraw_' + side)
+    obj.motion = lambda name, *args: event(name)
+
+    def apply(scene):
+        assert scene.allowed_collision_matrix == saved
+        event('restore')
+
+    obj.apply = apply
+    assert not obj.execute(None)
+    assert events.index('retained') < events.index('detach')
+    report = 'fail_release' if failure in ('detach', 'open_left', 'released') else 'fail_return'
+    assert events.index(report) < events.index('cancel')
+    assert 'restore' in events
+    if failure in ('detach', 'open_left', 'released', 'withdraw_left', 'restore'):
+        assert events[-1] == 'restore'  # finally retries cleanup even after failure
+    else:
+        assert events.index('restore') < events.index('left_return_ready')
+        assert obj.saved_acm is None
+
+
+@pytest.mark.parametrize('option,absent', [
+    ('retain_after_success', 'retained'),
+    ('release_after_retention', 'release_left'),
+    ('return_after_release', 'return_left'),
+])
+def test_optional_finish_stages_preserve_cancel_and_order(option, absent):
+    obj = TerminalInsertion.__new__(TerminalInsertion)
+    obj.config = {option: False}
+    obj.saved_acm = None
+    events = []
+    obj.command = lambda op: (events.append(op) or dict(return_complete=False, state='not_started'))
+    obj.release_right = lambda controller: events.append('release_right')
+    obj.approach_plan = object()
+    obj.return_right = lambda: events.append('return_right')
+    obj.align_left = lambda: events.append('align_left')
+    obj.feedback_insert = lambda: events.append('feedback_insert')
+    obj.release_left = lambda controller, status: events.append('release_left')
+    obj.return_left = lambda: events.append('return_left')
+    assert obj.execute(None)
+    assert events[:5] == ['status', 'release_right', 'return_right', 'align_left', 'feedback_insert']
+    assert absent not in events and events[-1] == 'cancel'

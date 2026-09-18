@@ -199,7 +199,8 @@ def test_anchor_max_z_constraint_rejects_invalid_upper_bound():
 
 
 @pytest.mark.parametrize("selected", [None, {0}, {1}, {2}])
-def test_builder_applies_both_anchor_limits_and_absolute_recovery_goals(monkeypatch, selected):
+@pytest.mark.parametrize('preserve_ik', [False, True])
+def test_builder_applies_both_anchor_limits_and_absolute_recovery_goals(monkeypatch, selected, preserve_ik):
     from dual_fr3_trunking_mtc.mtc import task_builder
 
     class Planner:
@@ -251,9 +252,11 @@ def test_builder_applies_both_anchor_limits_and_absolute_recovery_goals(monkeypa
     recovery_target.header.frame_id = "world"
     recovery_target.pose.position.y = 0.2
     recovery_target.pose.orientation.w = 1.0
+    anchor_joints = {'left_fr3_joint1': .3}
     task, _ = task_builder.create_mtc_task(
         object(), _task_plan(keypoints), specs, selected_stage_indices=selected,
         recovery_pose_goals={"cartesian_move_to_next_keypoint": recovery_target},
+        recovery_joint_goals={'direct_move_to_next_anchor': anchor_joints} if preserve_ik else None,
     )
     moves = task.stages[1:]
     assert len(moves) == (3 if selected is None else 1)
@@ -263,6 +266,8 @@ def test_builder_applies_both_anchor_limits_and_absolute_recovery_goals(monkeypa
             is_anchor or move.name == "cartesian_move_to_next_keypoint"
         )
         assert hasattr(move, "path_constraints") is is_anchor
+        if is_anchor and preserve_ik:
+            assert move.goal == anchor_joints
         if move.name == "cartesian_move_to_next_keypoint":
             # Recovery uses the saved endpoint, not the original relative vector.
             assert move.goal is recovery_target

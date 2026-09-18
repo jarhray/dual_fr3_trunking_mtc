@@ -10,6 +10,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/trunking_plan_node.py
   scripts/trunking_mtc_prototype.py
+  scripts/usb_insertion_skill.py
   scripts/trunking_readiness_gate.py
   scripts/trunking_segment_executor.py
   scripts/trunking_step_by_step.py
@@ -27,6 +28,8 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
 
   ament_add_pytest_test(test_terminal_insertion test/test_terminal_insertion.py)
+  ament_add_pytest_test(test_mtc_module_layout test/test_mtc_module_layout.py)
+  ament_add_pytest_test(test_insertion_skill test/test_insertion_skill.py)
   ament_add_pytest_test(test_mtc_prototype test/test_mtc_prototype.py)
   ament_add_pytest_test(test_path_length test/test_path_length.py)
   ament_add_pytest_test(test_diagnostics test/test_diagnostics.py)

@@ -16,7 +16,7 @@ ACTOR_TO_SIDE = {"leader": "left", "follower": "right"}
 
 def resolve_gripper_backend(simulation_backend: str) -> str:
     """Select the gripper interface from the single robot backend."""
-    from .runtime.config import resolve_simulation_backend
+    from dual_fr3_trunking_mtc.runtime.config import resolve_simulation_backend
     backend = resolve_simulation_backend(simulation_backend)
     return "franka" if backend == "real" else backend
 

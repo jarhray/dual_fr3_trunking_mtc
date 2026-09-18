@@ -8,9 +8,9 @@ import time
 import numpy as np
 from geometry_msgs.msg import Pose
 
-from .diagnostics import PlanningFailureHistory, log_planning_failure
-from .planning import PlannedTask, create_task_from_args
-from .task_builder import import_mtc_modules, preparation_pose_goal
+from dual_fr3_trunking_mtc.mtc.diagnostics import PlanningFailureHistory, log_planning_failure
+from dual_fr3_trunking_mtc.mtc.planning import PlannedTask, create_task_from_args
+from dual_fr3_trunking_mtc.mtc.task_builder import import_mtc_modules, preparation_pose_goal
 
 
 IK_POSITION_TOLERANCE = 1e-4  # m
@@ -200,6 +200,7 @@ def plan_preparation_candidates(
     node, task_plan, specs, args, logger, gripper_profiles=None, *,
     scene_provider=capture_start_scene, sampler=sample_preparation_ik,
     task_factory=create_task_from_args, clock=time.monotonic,
+    solution_validator=None,
 ):
     """
     Return a complete preparation+formal solution before permitting any motion.
@@ -286,16 +287,24 @@ def plan_preparation_candidates(
                     )
                     task.properties["timeout"] = max(0.001, deadline - clock())
                     if task.plan(1) and task.solutions:
+                        planned = PlannedTask(
+                            task, task.solutions[0], specs, copy.deepcopy(goals),
+                            snapshot.model_owner,
+                        )
+                        if solution_validator is not None and not solution_validator(planned):
+                            logger.warning('preparation pair rejected: terminal continuation is not plannable')
+                            # MoveTo can reach the same transport pose with a
+                            # different final IK branch. Resample the whole path
+                            # within the existing attempt budget before rejecting
+                            # this preparation pair.
+                            continue
                         logger.info(
                             "selected preparation pair L%d/F%d: "
                             "complete preparation and formal path accepted; "
                             "retaining exact joint goals and trajectories",
                             first+1, second+1,
                         )
-                        return PlannedTask(
-                            task, task.solutions[0], specs, copy.deepcopy(goals),
-                            snapshot.model_owner,
-                        )
+                        return planned
                     logger.warning(
                         "preparation pair L%d/F%d rejected (round %d, attempt %d)",
                         first+1, second+1, round_index+1, attempt,

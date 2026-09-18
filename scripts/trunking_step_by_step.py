@@ -15,14 +15,14 @@ from ament_index_python.packages import get_package_prefix
 from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import MultiThreadedExecutor
 
-from dual_fr3_trunking_mtc.models import (
+from dual_fr3_trunking_mtc.task.models import (
     DEFAULT_FOLLOWER_ORIENTATION_DIRECTION,
     DEFAULT_LEADER_LEAD_DISTANCE,
     DEFAULT_LEADER_ORIENTATION_DIRECTION,
     ORIENTATION_DIRECTIONS,
     path_orientation_yaw,
 )
-from dual_fr3_trunking_mtc.planner import load_keypoints
+from dual_fr3_trunking_mtc.task.planner import load_keypoints
 
 
 TOOL_ROLL = math.pi

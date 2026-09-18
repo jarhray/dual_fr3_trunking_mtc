@@ -43,14 +43,14 @@ mtc_prototype.launch.py
 
 `MtcStageSpec` 是领域模型和 MTC 之间的可序列化接口，同时用于阶段话题和诊断。关键点的 `in_slot` 决定段分类，调度器决定双臂顺序，编译器决定具体运动与夹爪阶段。
 
-准备搜索在相同 TCP 位姿下寻找不同 IK 关节配置，并检查后续完整路径。正常执行复用成功解，只有可恢复的执行失败才从实际状态重规划未完成阶段。
+准备搜索在相同 TCP 位姿下寻找不同 IK 关节配置，并检查后续完整路径。正常执行复用成功解；插入模式在解除固定后用实测抓姿重规划剩余路径，另在可恢复的执行失败后从实际状态重规划未完成阶段。
 
 ## 阶段语义
 
 | 阶段 | 实现 |
 | --- | --- |
 | 准备定位 | OMPL 到两个初始关键点上方 |
-| 准备夹持 | profile 对应的夹爪操作，保留交互确认 |
+| 准备夹持 | profile 对应的夹爪操作；ManiSkill 解除固定并验证后，下降前统一确认 |
 | 准备下降 | 两臂笛卡尔移动合并执行 |
 | `straighten` | 原地调整朝向，再做笛卡尔平移 |
 | `move_anchor` | leader 通过 OMPL 换锚点，检查 TCP 高度及路程 |
@@ -65,11 +65,11 @@ mtc_prototype.launch.py
 
 | 模块 | 职责与常见修改 |
 | --- | --- |
-| `models.py`、`planner.py` | 关键点、段类型、姿态规则和序列化 |
-| `scheduler.py` | 双臂任务顺序与锚点调度 |
+| `task/models.py`、`task/planner.py` | 关键点、段类型、姿态规则和序列化 |
+| `task/scheduler.py` | 双臂任务顺序与锚点调度 |
 | `stages/specs.py`、`stages/compiler.py` | 新阶段字段和任务到阶段的映射 |
-| `preparation.py` | 准备阶段与终端确认 |
-| `gripper.py` | profile 解析、限值检查、后端夹爪动作 |
+| `task/preparation.py` | 准备阶段与终端确认 |
+| `execution/gripper.py` | profile 解析、限值检查、后端夹爪动作 |
 | `mtc/task_builder.py` | StageSpec 到 MTC 对象的构造 |
 | `mtc/preparation_search.py` | IK 候选、组合选择与全程预检 |
 | `mtc/planning.py` | 完整规划重试与成功解保留 |
@@ -78,19 +78,71 @@ mtc_prototype.launch.py
 | `mtc/diagnostics.py` | 失败阶段诊断和统计 |
 | `runtime/config.py` | 启动、CLI 与节点共享默认值 |
 | `runtime/stage_publisher.py` | 阶段序列发布 |
-| `readiness.py` | 一次性启动就绪检查 |
-| `simulation_cable.py` | 线缆 spawn 服务和 USB 规划场景更新 |
-| `ros_node.py`、`markers.py` | 可视化节点、重载和 RViz 标记 |
-| `mtc_prototype.py` | 顶层编排与兼容入口 |
+| `nodes/readiness.py` | 一次性启动就绪检查 |
+| `execution/simulation_cable.py` | 线缆 spawn 服务和 USB 规划场景更新 |
+| `insertion_task/pipeline.py` | 终末动作编排、服务调用、阶段失败上报、临时 ACM 的恢复时机 |
+| `insertion_task/motion.py` | 末端 MoveTo/MoveRelative 构造、测量初态规划重试、单次执行 |
+| `insertion_task/planning_scene.py` | MoveIt 插座网格消息、安装碰撞对、USB 实测解除附着与夹持碰撞对 |
+| `nodes/planner.py`、`nodes/markers.py` | 可视化节点、重载和 RViz 标记 |
+| `nodes/prototype.py` | 顶层编排与兼容入口 |
 
-`mtc/executor.py` 保留逐阶段诊断实现；当前主执行流程使用 `cached_execution.py`。`segment_executor.py` 与固定动作脚本直接复用 MoveIt 控制接口，不能视为完整 MTC 流程的同义入口。
+`mtc/executor.py` 保留逐阶段诊断实现；当前主执行流程使用 `cached_execution.py`。`nodes/segment_executor.py` 与固定动作脚本直接复用 MoveIt 控制接口，不能视为完整 MTC 流程的同义入口。
 
 ## ManiSkill 线缆边界
 
 `maniskill_cable:=true` 时选择 `trunking_cable` 场景。仿真初始只有机器人；规划中按准备阶段纳入 USB 附着碰撞体，执行到 `SimulationCable` 时再调用 `/maniskill/cable/spawn` 并更新 MoveGroup 场景。
 
-线缆物理由仿真包负责。MTC 不将柔性线缆转换成刚性障碍，不执行线缆状态估计、力控或视觉反馈。固定端与滑孔是理想约束，详见 [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
+线缆物理由仿真包负责。MTC 不将柔性线缆转换成刚性障碍，不执行线缆状态估计或视觉反馈。
+当前接触夹持及 Rope-Actor 分体孔碰撞由物理包维护，不应套用早期固定夹持/理想滑孔版本的结论，详见 [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
+
+## 终末插入边界
+
+`TerminalInsertion.execute` 保留右爪释放、右臂退出回位、左臂接近、反馈插入、固定确认、左爪释放、左臂退出回位的顺序。
+
+- `insertion_task/planning.py`：在候选运输解的末态构造连续 MTC 任务，包含右爪开度预览、右臂退出/回位、左臂接近及完整插入碰撞预检；按完整解 ID 缓存相连轨迹，预检段不执行。
+- `mtc/preparation_search.py` / `mtc/planning.py`：通过 continuation validator 接受同时满足运输和孔前接近的候选。后续恢复规划也必须通过同一检查。
+- `mtc/cached_execution.py`：release/verify 后以实测 USB 附着重规划剩余路径，通过后才等待唯一一次 Enter；保持原笛卡尔目标及已选锚点关节末态，避免仅按相同位姿重采样到另一肘/腕分支；不重放闭爪/解除固定。等待后再次检查抓持。
+- `insertion_task/motion.py`：插入后退出/回位的 CurrentState 规划和兼容运动辅助函数。
+- `insertion_task/cli.py` / `insertion_skill.launch.py`：连接已有场景，从当前稳定夹持开始规划整段接近，然后复用相同终末流程。
+
+插入前使用缓存 MoveIt 轨迹；start 仍按实际 USB 位姿检查原对齐阈值，漂移超限则停止。删除了末尾临时重规划微小对齐动作；不改变孔前目标或阈值。右臂退出仍属于 `right_return`，失败保持原上报语义。执行失败不自动重放部分轨迹。
+
+物理包 `usb/geometry.py` 统一孔壁调整、USB 关键点及抓姿变换；MTC 保留三角网格消息构造，
+`usb/scene.py` 保留凸分解、支撑反力采样和实体/约束生命周期。`usb/insertion.py` 的纯策略用仿真时间
+滤波、推进及确认成功；`usb/bridge.py` 的具名服务处理负责控制权、忙检查和墙钟 heartbeat。
+只有先记录 `inserted_unretained`、释放控制权后，物理步边界才创建保持约束；MTC 收到 retained 确认后才开左爪。
+status 不续租；失败/取消仍归还驱动控制权，MTC 的 finally 负责取消和恢复临时碰撞许可。
+
+推荐使用 `mtc_prototype.launch.py simulation_backend:=maniskill cable_solver:=rope_actor insertion_enabled:=true`，
+USB-only 追加 `load_cable:=false`。参数来源、坐标系、默认值差异和调参验证路径见
+[插入参数](../dual_fr3_maniskill/docs/insertion_parameters.md)，本轮结果见
+[初轮重构验证](../dual_fr3_maniskill/docs/insertion_refactor_validation.md) 和
+[本轮工作流验证](../dual_fr3_maniskill/docs/insertion_workflow_validation.md)。
 
 ## 验证边界
 
 `test/` 覆盖规划与调度、配置、准备搜索、路径约束、执行恢复、夹爪和后端启动。离线测试不代表真机或 GPU 完整任务成功。测试入口见 [ManiSkill 环境与验证](../dual_fr3_maniskill/docs/setup.md)，运行诊断见[执行说明](docs/execution.md)。
+
+## 目录边界与兼容
+
+```text
+dual_fr3_trunking_mtc/
+├── task/            数据模型、关键点解析、调度、准备阶段定义
+├── stages/          可序列化阶段规格与编译
+├── mtc/             MTC 对象构造、整段规划、缓存执行及恢复
+├── execution/       夹爪 action 与物理线缆服务客户端
+├── insertion_task/  终末流程、连续接近规划、场景同步、独立 skill CLI
+├── nodes/           ROS 入口装配、就绪门控、可视化、旧诊断执行器
+├── runtime/         默认值、CLI 解析、日志和阶段发布
+└── _compat/         旧根模块的兼容别名
+```
+
+`nodes/prototype.py` 只装配任务流程；参数定义/校验在 `runtime/arguments.py`，数值缺省在 `runtime/config.py`。
+`task → stages → mtc` 传递领域计划与阶段规格；`execution` 处理外部动作，`insertion_task` 复用这些客户端。
+`insertion_task/cli.py` 是独立 skill 入口，不启动第二个物理场景。
+
+根包将 `_compat` 追加到模块搜索路径末尾。旧导入与新路径是同一模块对象，既有脚本与测试中的 monkeypatch 保持有效；
+无需全局 import hook，也不预加载全部 ROS/物理模块。新代码使用上表的新路径。历史文档中的旧路径通过兼容目录查找。
+
+全部参数的作用与消费文件见 [参数索引](docs/parameters.md)，各入口的当前数值见 [默认值来源](docs/parameter_defaults.md)。
+本轮结构整理的测试与局限见 [验证记录](../dual_fr3_maniskill/docs/structure_validation.md)。

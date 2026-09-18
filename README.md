@@ -19,7 +19,7 @@ source install/setup.bash
 
 ## 使用方法
 
-以下入口都会启动所需的 MoveIt 和机器人环境，同一 ROS 域内选择一个运行。
+完整任务入口会启动 MoveIt 和机器人环境，同一 ROS 域内选择一个运行；独立插入入口连接已有环境。
 
 ### 1. 查看关键点和任务调度
 
@@ -33,7 +33,7 @@ ros2 launch dual_fr3_trunking_mtc demo.launch.py simulation_backend:=fake
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  simulation_backend:=fake plan:=true execute:=false
+  simulation_backend:=fake insertion_enabled:=false plan:=true execute:=false
 ```
 
 终端输出规划结果和阶段诊断；该入口不发布上面的关键点标记。只检查阶段构造时，可同时设置 `plan:=false execute:=false`。
@@ -46,10 +46,10 @@ Gazebo 执行：
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  simulation_backend:=gazebo execute:=true
+  simulation_backend:=gazebo insertion_enabled:=false execute:=true
 ```
 
-ManiSkill 执行，并在准备阶段生成线缆：
+推荐默认入口为 ManiSkill + Rope-Actor + 线缆，执行完整任务：
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
@@ -57,11 +57,13 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
   maniskill_python:="$PWD/.venv/bin/python"
 ```
 
-ManiSkill 流程为：完整路径预检 → 张开 → 按关键点提前定位 USB/线缆 → 接近准备位 → 接触闭合 → 解除定位 → 稳定验证 → 规划附着 → 下降与走线。默认在两次闭合和下降前等待确认，按 Enter 继续，输入 `q` 中止；无可用终端输入时会中止。自动仿真可加 `preparation_interactive:=false`。
+准备自动完成：整段规划预检 → 张开 → 定位 USB/线缆 → 接近 → 双爪闭合 → 解除世界固定 → 稳定验证。随后用实测抓姿更新规划附着，重新规划下降、走线和孔前接近；通过后只等待一次 Enter，开始任务。输入 `q` 中止；无可用终端输入时中止。自动仿真可加 `preparation_interactive:=false`。
+
+从准备到孔前均使用 MoveIt；末端右臂释放退出/回位、左臂接近和完整插入直线预检一起检查，不能只凭走线可规划就开始执行。物理插入仍使用原反馈控制。实测抓姿漂移或环境变化仍可能使执行停止，预规划不代替运行时验证。
 
 ManiSkill 在闭合前创建 USB。`load_cable:=false` 不创建线缆，但保留双臂准备、下降和原后续 MTC 轨迹，作为 USB 搬运调试；`maniskill_cable:=false` 只运行机器人；`execute:=false` 不会生成物体。详见 [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
 
-本次接触夹持验收使用 `cable_solver:=rope_actor` 和 USB-only；MPM 后续完善。全局默认仍是 `mpm`，因此推荐命令显式选择 Rope-Actor。仅 USB 的完整命令见 [MTC 使用说明](../dual_fr3_maniskill/docs/mtc_cable.md#启动)。
+MTC 入口默认 `rope_actor`，其余独立物理入口保留原 `mpm` 默认。历史接触夹持记录使用 Rope-Actor + USB-only，不代表带线缆场景的本轮结果。仅 USB 的完整命令见 [MTC 使用说明](../dual_fr3_maniskill/docs/mtc_cable.md#启动)。
 参数、模型差异和验证方法见[线缆建模方式](../dual_fr3_maniskill/docs/cable_backends.md)。
 
 ### 4. 使用自己的路径
@@ -80,27 +82,46 @@ keypoints_file:="$PWD/src/dual_fr3_trunking_mtc/config/keypoints.yaml"
 
 ```bash
 ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
-  simulation_backend:=real \
+  simulation_backend:=real insertion_enabled:=false \
   left_robot_ip:=192.168.1.2 right_robot_ip:=192.168.2.2 \
   plan:=true execute:=false
 ```
 
 核对路径和夹爪参数后，改为 `execute:=true`。真机执行默认先对两个夹爪进行 Homing，夹爪应为空；若已手动完成 Homing，使用 `home_grippers_before_execute:=false grippers_homed:=true`。详细行为见[执行与排查](docs/execution.md)。
 
+### 6. 独立调用插入 skill
+
+完整任务命令追加 `run_insertion:=false` 可在运输完成后保留插座和抓持。待原 MTC 进程结束、USB 仍稳定且世界固定已解除，在同一 ROS 域另开终端执行：
+
+```bash
+ros2 launch dual_fr3_trunking_mtc insertion_skill.launch.py
+# 仅检查同一整段接近规划：追加 execute:=false
+```
+
+此入口不启动第二套仿真，不重新生成或抓取物体，也不等待 Enter。复用 `TerminalInsertion` 的右臂释放退出/回位 → 左臂对齐 → 反馈插入 → 固定 → 左臂释放退出/回位。场景需启用 `insertion_enabled`，MoveGroup 需加载 `move_group/ExecuteTaskSolutionCapability`；若使用自定义 YAML，传入与当前场景相同的 `cable_config:=...`。
+
+完整返回后重复调用直接成功返回；进行中或失败后调用拒绝重放。失败按现有 `/usb_cable_demo/reset` 清理后重新准备夹持。独立调度时预先启用物理插座，见 [独立调用说明](../dual_fr3_maniskill/docs/usb_insertion.md#独立调用)。
+
 ## 常用参数
 
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
-| `simulation_backend` | `gazebo` | `gazebo`、`maniskill`、`fake`、`real` 四选一 |
+| `simulation_backend` | `maniskill`（MTC 入口） | `gazebo`、`maniskill`、`fake`、`real` 四选一 |
 | `keypoints_file` | 包内 `config/keypoints.yaml` | 任务关键点 |
 | `preparation_enabled` | `true` | 启用准备动作；带线缆的 ManiSkill 任务需要保留 |
 | `preparation_height` | `0.05` | 初始悬停高度和下降距离，单位米 |
-| `preparation_interactive` | `true` | 准备阶段终端确认 |
+| `preparation_interactive` | `true` | 夹持解除固定、实测规划通过后，下降前一次确认 |
 | `motion_velocity_scaling` / `motion_acceleration_scaling` | 均为 `0.2` | 运动速度和加速度比例 |
-| `cable_solver` | `mpm` | ManiSkill 线缆模型：`mpm` 或 `rope_actor` |
+| `cable_solver` | `rope_actor`（MTC 入口） | ManiSkill 线缆模型：`mpm` 或 `rope_actor` |
 | `maniskill_cable` | `true` | 启用 ManiSkill USB 接触夹持场景 |
 | `load_cable` | `true` | `false` 不创建线缆，保留原双臂 MTC 轨迹以调试 USB 搬运 |
+| `insertion_enabled` | `true`（ManiSkill 接触夹持模式） | 完整流程收尾插入；其他后端/纯机器人模式缺省 false |
+| `run_insertion` | `true` | false：运输后保留已启用的插座，供独立 skill 调用 |
 | `use_rviz` / `maniskill_viewer` | 均为 `true` | 分别控制 RViz 和 ManiSkill 窗口 |
+
+末端动作修改位置见 [架构](ARCHITECTURE.md#终末插入边界)，孔尺寸、物理、反馈控制及成功/失败阈值见
+[插入参数与覆盖关系](../dual_fr3_maniskill/docs/insertion_parameters.md)。当前推荐 YAML 的末端路径比例为 3.0，代码缺省为 1.5。
+显式传入 `insertion_enabled` 仍优先于按后端计算的缺省值。
 
 完整参数可查询：
 
@@ -114,3 +135,7 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py --show-args
 - [执行与排查](docs/execution.md)：执行流程、ROS 接口、失败诊断和逐段工具。
 - [架构说明](ARCHITECTURE.md)：启动链、模块职责和扩展位置。
 - [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)：接触夹持、定位释放和滑移监测。
+
+本轮具体测试和仿真结果见 [工作流验证记录](../dual_fr3_maniskill/docs/insertion_workflow_validation.md)。
+
+参数的作用、单位、消费文件及验证方法见 [参数索引](docs/parameters.md)；当前声明值和配置差异见 [默认值来源](docs/parameter_defaults.md)。

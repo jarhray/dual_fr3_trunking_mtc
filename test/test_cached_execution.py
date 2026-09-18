@@ -300,6 +300,65 @@ def test_planning_configuration_exception_does_not_loop(monkeypatch):
     assert len(built) == 1
 
 
+@pytest.mark.parametrize('replan_ok', [False, True])
+def test_measured_grasp_replans_suffix_before_only_confirmation(replan_ok):
+    stages = [spec(0, 'GripperOperation'), spec(1, 'SimulationCable'), spec(2)]
+    stages[1].cable_operation = 'release_verify'
+    stages[2].confirmation_required = True
+    stages[2].primitive = 'dual_cartesian_descent'
+    initial = planned(stages)
+    replacement = planned(stages[2:], offset=100)
+    events = []
+
+    def replan(*positional, **kwargs):
+        assert positional[2] == tuple(stages[2:])
+        events.append('replan')
+        return replacement if replan_ok else None
+
+    cable = NS(execute=lambda s: events.append(s.cable_operation) or True,
+               ensure_grasp=lambda: events.append('check_grasp') or True)
+    result = cached_execution.execute_cached_solution(
+        initial, None, None, args(), LOGGER, planner=replan, replan_after_grasp=True,
+        cable_controller=cable,
+        gripper_controller=NS(execute=lambda r: events.append('close') or True),
+        confirmation_callback=lambda s: events.append('enter') or True,
+    )
+    assert result is replan_ok
+    assert not initial.task.executed
+    assert events[:3] == ['close', 'release_verify', 'replan']
+    assert events[3:] == (['check_grasp', 'enter', 'check_grasp'] if replan_ok else [])
+    assert len(replacement.task.executed) == int(replan_ok)
+
+
+def test_unplannable_terminal_continuation_rejects_transport_candidate(monkeypatch):
+    tasks = [NS(plan=lambda: True, solutions=[object()]) for _ in range(2)]
+    built = iter(tasks)
+    monkeypatch.setattr(planning, 'create_task_from_args', lambda *a, **kw: (next(built), []))
+    checked = []
+
+    def validate(candidate):
+        checked.append(candidate.task)
+        return len(checked) == 2
+
+    result = planning.plan_with_retries(
+        None, None, [], args(), LOGGER, solution_validator=validate)
+    assert checked == tasks
+    assert result.task is tasks[1]
+
+
+def test_measured_replan_keeps_selected_anchor_branch_without_other_arm_joints():
+    anchor = spec(0)
+    anchor.primitive = 'direct_move_to_next_anchor'
+    anchor.group = 'left_fr3_arm'
+    group = NS(active_joint_model_names=['left_joint'])
+    state = NS(joint_positions={'left_joint': .3, 'right_joint': -.7})
+    scene = NS(current_state=state, robot_model=NS(get_joint_model_group=lambda name: group))
+    cached = [cached_execution.CachedStage(anchor, NS(end=NS(scene=scene)))]
+    targets = cached_execution.capture_anchor_joint_targets(cached)
+    state.joint_positions['left_joint'] = 2.
+    assert targets == {anchor.name: {'left_joint': .3}}
+
+
 @pytest.mark.parametrize("preparation_enabled", [False, True])
 @pytest.mark.parametrize("planning_succeeds", [False, True])
 @pytest.mark.parametrize("execute_enabled", [False, True])
@@ -342,6 +401,7 @@ def test_main_prechecks_preparation_before_any_execution(
     monkeypatch.setattr(mtc_prototype, "plan_preparation_candidates", candidate_search)
     monkeypatch.setattr(mtc_prototype, "execute_cached_solution", execute)
     code = mtc_prototype.main([
+        '--simulation-backend', 'gazebo',
         "--execute", str(execute_enabled), "--preparation-enabled", str(preparation_enabled),
         "--publish-solution", "false", "--keep-alive-sec", "0",
     ])

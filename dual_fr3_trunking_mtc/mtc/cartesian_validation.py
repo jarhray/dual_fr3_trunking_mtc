@@ -6,8 +6,8 @@ import math
 
 import numpy as np
 
-from .path_length import LENGTH_EPSILON, sampled_tcp_positions
-from .diagnostics import append_failure_comment
+from dual_fr3_trunking_mtc.mtc.path_length import LENGTH_EPSILON, sampled_tcp_positions
+from dual_fr3_trunking_mtc.mtc.diagnostics import append_failure_comment
 
 
 LOGGER = logging.getLogger(__name__)
