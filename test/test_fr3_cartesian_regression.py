@@ -12,6 +12,7 @@ import xacro
 
 from dual_fr3_trunking_mtc.models import Keypoint, rpy_to_quaternion
 from dual_fr3_trunking_mtc.mtc.preparation_search import pose_in_model
+from dual_fr3_trunking_mtc.mtc.cached_validation import CachedPathValidator
 from dual_fr3_trunking_mtc.mtc.task_builder import create_mtc_task
 from dual_fr3_trunking_mtc.planner import build_segment_plans
 from dual_fr3_trunking_mtc.runtime.config import DEFAULTS
@@ -85,6 +86,9 @@ def test_fr3_continuous_line_passes_without_disabling_jump_or_tcp_checks(tmp_pat
             assert bool(task.plan(1)) is accepted
             if accepted:
                 assert all(task[s.name].solutions for s in specs)
+                validator = CachedPathValidator(scene, logging.getLogger(__name__))
+                for spec in specs:
+                    assert validator.validate(spec.name, task[spec.name].solutions[0])
                 assert "Cartesian TCP in-place deviation" in caplog.text
                 assert "accepted" in caplog.text
             else:

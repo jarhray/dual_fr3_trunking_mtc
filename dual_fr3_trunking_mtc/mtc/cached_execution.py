@@ -35,6 +35,21 @@ def _solution_ids(message):
     }
 
 
+def selected_stage_solution(planned, name, selected_ids=None):
+    """Return the stage candidate belonging to the selected connected solution."""
+    introspection = planned.task.introspection()
+    if selected_ids is None:
+        selected_ids = _solution_ids(planned.solution.toMsg(introspection))
+    matches = []
+    for candidate in planned.task[name].solutions:
+        ids = _solution_ids(candidate.toMsg(introspection))
+        if ids and ids.issubset(selected_ids):
+            matches.append(candidate)
+    if len(matches) != 1:
+        raise ValueError(f"cannot identify selected solution for stage {name!r}")
+    return matches[0]
+
+
 def cache_selected_stages(planned):
     """
     Select stage solutions belonging to the chosen complete solution.
@@ -42,8 +57,7 @@ def cache_selected_stages(planned):
     Stage.solutions[0] alone is insufficient: independently cheapest stages
     need not be connected to each other. Match MTC introspection solution IDs.
     """
-    introspection = planned.task.introspection()
-    selected_ids = _solution_ids(planned.solution.toMsg(introspection))
+    selected_ids = _solution_ids(planned.solution.toMsg(planned.task.introspection()))
     cached = []
     for spec in planned.specs:
         if not spec.executable:
@@ -51,14 +65,7 @@ def cache_selected_stages(planned):
         if spec.mtc_stage_type in ("GripperOperation", "SimulationCable"):
             cached.append(CachedStage(spec, None))
             continue
-        matches = []
-        for candidate in planned.task[spec.name].solutions:
-            ids = _solution_ids(candidate.toMsg(introspection))
-            if ids and ids.issubset(selected_ids):
-                matches.append(candidate)
-        if len(matches) != 1:
-            raise ValueError(f"cannot identify selected solution for stage {spec.name!r}")
-        cached.append(CachedStage(spec, matches[0]))
+        cached.append(CachedStage(spec, selected_stage_solution(planned, spec.name, selected_ids)))
     return cached
 
 
@@ -108,7 +115,8 @@ def execute_cached_solution(
     gripper_profiles=None, confirmation_callback=None,
     planner=plan_with_retries,
     cable_controller=None,
-    replan_after_grasp=False,
+    grasp_validator=None,
+    cached_continuation_validator=None,
 ):
     """
     Execute exact cached trajectories, with bounded recovery after failure.
@@ -164,12 +172,30 @@ def execute_cached_solution(
                 except Exception:
                     logger.exception("simulation USB operation raised; stopping before transport")
                     return False
-                if replan_after_grasp and spec.cable_operation == 'release_verify':
-                    # release_verify has just installed the measured attachment.
-                    # Replan the suffix before Enter, without repeating the grasp
-                    # or shifting any already selected Cartesian endpoint.
+                if spec.cable_operation == 'release_verify':
+                    # release_verify has installed the measured attachment.
+                    # Validate the exact remaining cache before Enter; success
+                    # must never trigger a new motion-planning request.
+                    logger.info('grasp released and verified; validating cached trajectories against measured scene')
+                    try:
+                        if grasp_validator is None:
+                            from dual_fr3_trunking_mtc.mtc.cached_validation import validate_cached_after_grasp
+                            grasp_validator = validate_cached_after_grasp
+                        valid = grasp_validator(
+                            node, planned, cached[index + 1:], logger,
+                            continuation_validator=cached_continuation_validator,
+                        )
+                    except Exception:
+                        logger.exception('cached trajectory validation unavailable; stopping before transport')
+                        return False
+                    if valid:
+                        logger.info('measured-scene validation passed; continuing original cached trajectories without replanning')
+                        continue
+                    if not getattr(args, 'replan_after_grasp', DEFAULTS.replan_after_grasp):
+                        logger.error('cached trajectory validation failed; stopping because replan_after_grasp=false')
+                        return False
                     remaining = tuple(entry.spec for entry in cached[index + 1:])
-                    logger.info('grasp released and verified; planning the remaining path from measured grasp')
+                    logger.warning('cached trajectory validation failed; replan_after_grasp=true: replanning unfinished stages')
                     planned = planner(
                         node, task_plan, remaining, args, logger,
                         gripper_profiles=gripper_profiles, recovery_pose_goals=fixed_targets,

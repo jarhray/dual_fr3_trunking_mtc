@@ -53,6 +53,8 @@
 | `execute_stage_by_stage` | `execute_stage_by_stage` | [launch/mtc_prototype.launch.py:281](../launch/mtc_prototype.launch.py#L281) | `DEFAULTS.execute_stage_by_stage` |
 | `execution_replan_attempts` | `--execution-replan-attempts` | [dual_fr3_trunking_mtc/runtime/arguments.py:171](../dual_fr3_trunking_mtc/runtime/arguments.py#L171) | `DEFAULTS.execution_replan_attempts` |
 | `execution_replan_attempts` | `execution_replan_attempts` | [dual_fr3_trunking_mtc/runtime/config.py:65](../dual_fr3_trunking_mtc/runtime/config.py#L65) | `2` |
+| `replan_after_grasp` | `--replan-after-grasp` / launch 同名项 | [runtime/arguments.py](../dual_fr3_trunking_mtc/runtime/arguments.py)、[mtc_prototype.launch.py](../launch/mtc_prototype.launch.py) | `DEFAULTS.replan_after_grasp` |
+| `replan_after_grasp` | `replan_after_grasp` | [runtime/config.py](../dual_fr3_trunking_mtc/runtime/config.py) | `False` |
 | `execution_replan_attempts` | `execution_replan_attempts` | [launch/mtc_prototype.launch.py:291](../launch/mtc_prototype.launch.py#L291) | `DEFAULTS.execution_replan_attempts` |
 | `fake_sensor_commands` | `fake_sensor_commands` | [dual_fr3_trunking_mtc/runtime/config.py:24](../dual_fr3_trunking_mtc/runtime/config.py#L24) | `True` |
 | `fake_sensor_commands` | `fake_sensor_commands` | [launch/demo.launch.py:23](../launch/demo.launch.py#L23) | `launch_default(DEFAULTS.fake_sensor_commands)` |

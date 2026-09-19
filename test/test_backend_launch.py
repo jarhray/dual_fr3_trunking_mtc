@@ -44,6 +44,7 @@ def test_launch_defaults_with_one_backend_selector(package, filename):
     assert context.launch_configurations['simulation_backend'] == expected
     if filename == 'mtc_prototype.launch.py':
         assert context.launch_configurations['cable_solver'] == 'rope_actor'
+        assert context.launch_configurations['replan_after_grasp'] == 'false'
         for name in ('load_cable', 'execute', 'insertion_enabled', 'run_insertion'):
             assert context.launch_configurations[name] == 'true'
     assert "use_gazebo" not in context.launch_configurations
@@ -174,3 +175,26 @@ def test_mtc_defaults_match_recommended_explicit_command():
     apply_arguments(description, implicit)
     apply_arguments(description, explicit)
     assert implicit.launch_configurations == explicit.launch_configurations
+
+
+@pytest.mark.parametrize('enabled', ['false', 'true'])
+def test_post_grasp_policy_is_forwarded_to_mtc_cli(monkeypatch, enabled):
+    import launch_ros.actions
+    from launch.utilities import perform_substitutions, normalize_to_list_of_substitutions
+    original = launch_ros.actions.Node
+    arguments = []
+
+    def capture_node(*args, **kwargs):
+        if kwargs.get('executable') == 'trunking_mtc_prototype.py':
+            arguments.append(kwargs['arguments'])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(launch_ros.actions, 'Node', capture_node)
+    description = load_launch('dual_fr3_trunking_mtc', 'mtc_prototype.launch.py')
+    context = LaunchContext()
+    context.launch_configurations['replan_after_grasp'] = enabled
+    apply_arguments(description, context)
+    assert arguments
+    for values in arguments:
+        values = [perform_substitutions(context, normalize_to_list_of_substitutions(v)) for v in values]
+        assert values[values.index('--replan-after-grasp') + 1] == enabled

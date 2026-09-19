@@ -293,6 +293,10 @@ def generate_launch_description():
         DEFAULTS.execution_replan_attempts,
         description="Maximum recovery replans of unfinished stages after execution failure",
     )
+    replan_after_grasp = declare_argument(
+        "replan_after_grasp", DEFAULTS.replan_after_grasp,
+        description="Allow replanning only when cached trajectories fail validation after measured grasp",
+    )
     readiness_timeout = declare_argument(
         "readiness_timeout", DEFAULTS.readiness_timeout
     )
@@ -439,6 +443,8 @@ def generate_launch_description():
         LaunchConfiguration("planning_attempts"),
         "--execution-replan-attempts",
         LaunchConfiguration("execution_replan_attempts"),
+        "--replan-after-grasp",
+        LaunchConfiguration("replan_after_grasp"),
         "--keep-alive-sec",
         LaunchConfiguration("mtc_keep_alive_sec"),
     ]
@@ -603,6 +609,7 @@ def generate_launch_description():
             execute_stage_by_stage,
             planning_attempts,
             execution_replan_attempts,
+            replan_after_grasp,
             readiness_timeout,
             state_max_age,
             home_grippers_before_execute,

@@ -98,6 +98,7 @@
 | `anchor_max_path_length_ratio` | 无量纲 | 换锚点 TCP 路程/实际起终点距离上限，独立于 insertion.max_path_length_ratio。 |
 | `planning_attempts` | 次 | 完整任务/恢复规划及候选内 pipeline 重试预算。 |
 | `execution_replan_attempts` | 次 | 执行失败后未完成阶段的恢复规划上限，0 关闭。 |
+| `replan_after_grasp` | 布尔 | 默认 false；实测抓取场景中的缓存验证失败时才允许重规划，验证通过始终复用原轨迹。 |
 | `plan` | 布尔 | false 仅构造任务；true 执行全程规划。 |
 | `execute` | 布尔 | 是否执行成功解；独立插入 skill 的 false 也只规划，仍会同步规划场景。 |
 | `execute_stage_by_stage` | 布尔 | 正常逐段执行同一成功解；false 仅支持无准备/夹爪阶段的整任务 action。 |

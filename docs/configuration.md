@@ -91,6 +91,7 @@ metadata:
 | `anchor_max_path_length_ratio` | `1.5` | 换锚点 TCP 路程 / 起终点直线距离上限 |
 | `planning_attempts` | `10` | 完整规划或恢复规划的尝试上限 |
 | `execution_replan_attempts` | `2` | 可恢复执行失败后的重规划上限，0 表示关闭 |
+| `replan_after_grasp` | `false` | 抓取后先验证原缓存轨迹；验证失败时是否允许重规划，false 时停止。独立于执行失败恢复次数 |
 
 启用准备动作时，先搜索不同关节姿态并检查整条后续路径：
 

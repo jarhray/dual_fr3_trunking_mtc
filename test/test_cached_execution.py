@@ -17,7 +17,7 @@ def spec(index, kind="MoveTo"):
         stage_index=index, name=f"stage_{index}", executable=True,
         mtc_stage_type=kind, confirmation_required=False, ik_frame="tcp",
         actor="leader", gripper_profile="cable_tip", gripper_action="",
-        gripper_width_override=None,
+        gripper_width_override=None, cable_operation='spawn',
     )
 
 
@@ -228,6 +228,7 @@ def test_contact_preparation_failure_prevents_later_stages_and_transport(failed)
     result = cached_execution.execute_cached_solution(
         initial, None, None, args(), LOGGER, gripper_controller=NS(execute=close),
         cable_controller=NS(execute=insert, ensure_grasp=lambda: True), planner=unexpected_plan,
+        grasp_validator=lambda *a, **kw: True,
     )
     assert result is (failed is None)
     all_events = ["spawn", "left", "right", "release_verify"]
@@ -300,8 +301,11 @@ def test_planning_configuration_exception_does_not_loop(monkeypatch):
     assert len(built) == 1
 
 
-@pytest.mark.parametrize('replan_ok', [False, True])
-def test_measured_grasp_replans_suffix_before_only_confirmation(replan_ok):
+@pytest.mark.parametrize('valid,enabled,replan_ok', [
+    (True, False, False), (True, True, False),
+    (False, False, False), (False, True, False), (False, True, True),
+])
+def test_measured_grasp_validates_cache_before_optional_replan_and_confirmation(valid, enabled, replan_ok):
     stages = [spec(0, 'GripperOperation'), spec(1, 'SimulationCable'), spec(2)]
     stages[1].cable_operation = 'release_verify'
     stages[2].confirmation_required = True
@@ -309,6 +313,12 @@ def test_measured_grasp_replans_suffix_before_only_confirmation(replan_ok):
     initial = planned(stages)
     replacement = planned(stages[2:], offset=100)
     events = []
+
+    def validate(_node, selected, cached, _logger, **kwargs):
+        assert selected is initial
+        assert [item.spec for item in cached] == stages[2:]
+        events.append('validate')
+        return valid
 
     def replan(*positional, **kwargs):
         assert positional[2] == tuple(stages[2:])
@@ -318,16 +328,36 @@ def test_measured_grasp_replans_suffix_before_only_confirmation(replan_ok):
     cable = NS(execute=lambda s: events.append(s.cable_operation) or True,
                ensure_grasp=lambda: events.append('check_grasp') or True)
     result = cached_execution.execute_cached_solution(
-        initial, None, None, args(), LOGGER, planner=replan, replan_after_grasp=True,
+        initial, None, None, args(replan_after_grasp=enabled, execution_replan_attempts=0),
+        LOGGER, planner=replan, grasp_validator=validate,
         cable_controller=cable,
         gripper_controller=NS(execute=lambda r: events.append('close') or True),
         confirmation_callback=lambda s: events.append('enter') or True,
     )
-    assert result is replan_ok
+    accepted = valid or (enabled and replan_ok)
+    assert result is accepted
+    assert events[:3] == ['close', 'release_verify', 'validate']
+    expected = ['replan'] if not valid and enabled else []
+    assert events[3:] == expected + (['check_grasp', 'enter', 'check_grasp'] if accepted else [])
+    assert initial.task.executed == ([initial.task.candidates[stages[2].name][0]] if valid else [])
+    assert len(replacement.task.executed) == int(not valid and enabled and replan_ok)
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_grasp_validation_exception_stops_without_motion_confirmation_or_replanning(enabled):
+    stages = [spec(0, 'SimulationCable'), spec(1)]
+    stages[0].cable_operation = 'release_verify'
+    initial = planned(stages)
+
+    def unavailable(*a, **kw):
+        raise RuntimeError('scene service unavailable')
+
+    assert not cached_execution.execute_cached_solution(
+        initial, None, None, args(replan_after_grasp=enabled), LOGGER,
+        cable_controller=NS(execute=lambda s: True), grasp_validator=unavailable,
+        planner=unexpected_plan, confirmation_callback=unexpected_plan,
+    )
     assert not initial.task.executed
-    assert events[:3] == ['close', 'release_verify', 'replan']
-    assert events[3:] == (['check_grasp', 'enter', 'check_grasp'] if replan_ok else [])
-    assert len(replacement.task.executed) == int(replan_ok)
 
 
 def test_unplannable_terminal_continuation_rejects_transport_candidate(monkeypatch):

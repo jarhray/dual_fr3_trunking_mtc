@@ -21,6 +21,7 @@ def test_cli_defaults_are_sourced_from_runtime_config():
     assert args.anchor_max_path_length_ratio == pytest.approx(1.5)
     assert args.planning_attempts == DEFAULTS.planning_attempts
     assert args.execution_replan_attempts == 2
+    assert args.replan_after_grasp is DEFAULTS.replan_after_grasp is False
     assert args.cartesian_jump_threshold == pytest.approx(DEFAULTS.cartesian_jump_threshold)
     assert args.cartesian_path_tolerance == pytest.approx(DEFAULTS.cartesian_path_tolerance)
     assert args.preparation_ik_candidates == DEFAULTS.preparation_ik_candidates
@@ -49,6 +50,11 @@ def test_preparation_and_mtc_builder_share_runtime_defaults():
 def test_cli_accepts_path_length_ratio_override():
     args = _parse_args(["--anchor-max-path-length-ratio", "1.2"])
     assert args.anchor_max_path_length_ratio == 1.2
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_cli_accepts_explicit_post_grasp_replan(enabled):
+    assert _parse_args(['--replan-after-grasp', str(enabled)]).replan_after_grasp is enabled
 
 
 @pytest.mark.parametrize("option,value", [

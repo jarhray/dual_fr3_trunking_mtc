@@ -18,7 +18,17 @@
 | `plan:=true execute:=false` | 完整规划预检，不运动 |
 | `plan:=true execute:=true` | 规划成功后执行，当前默认模式 |
 
-ManiSkill 接触夹持准备自动定位并闭爪；随后 解除世界固定、验证抓持、以实测抓姿完成剩余路径预检后，在下降前只等待一次 Enter。按 Enter 开始任务、输入 `q` 中止；`preparation_interactive:=false` 跳过确认，适用于自动仿真。其他后端保留原闭合前确认。
+ManiSkill 接触夹持准备自动定位并闭爪；随后解除世界固定、验证抓持、更新实测 USB 附着位姿，并验证剩余的原缓存轨迹（启用插入时也包括原插入接近和碰撞预检段）。通过后保留原关节路径、速度和时间参数，在下降前只等待一次 Enter。按 Enter 开始任务、输入 `q` 中止；`preparation_interactive:=false` 跳过确认，适用于自动仿真。其他后端保留原闭合前确认。
+
+抓取后验证默认不调用运动规划器。验证检查实测起点与缓存起点的关节差（上限 0.01）、关节限位、双臂和附着体碰撞；检查全部缓存路点，并把相邻点细分到每个关节步长不超过 0.002（转动关节 rad、移动关节 m）。这是离散碰撞验证，不是连续碰撞检测。未运动的关节保留实测值；后续夹爪动作按实际开度到目标开度检查。插入接近还须满足原 USB 对齐阈值。验证成功后同步缓存场景的附着体，避免执行时恢复预设抓姿。
+
+`replan_after_grasp:=false` 为默认值：缓存验证不通过就停止，不继续下降或搬运。明确允许验证失败后重规划时，追加：
+
+```bash
+replan_after_grasp:=true
+```
+
+即使开启此项，验证通过也始终复用原轨迹；只有验证不通过才从实测状态重规划未完成阶段，仍使用原目标和 `planning_attempts` 次数上限。不会重放抓取。读取实测场景失败、缺少附着体或验证异常时直接停止，不把未知状态当成可重规划的碰撞失败。日志以 `[cached-validation]` 给出具体阶段和失败位置。
 
 ManiSkill USB 场景在机械臂接近前按关键点准备目标 `spawn` 并固定，随后张开接近，闭合动作结束后仍须通过持续双指接触、解除世界定位、释放后稳定验证，才能提交规划附着和搬运。`load_cable:=false` 不创建线缆，但保留双臂准备、夹持验证、下降及原正式 MTC 运动，用于 USB 搬运调试，不代表完成线缆布线。详见[接口与状态](../../dual_fr3_maniskill/docs/mtc_cable.md)。
 
@@ -35,6 +45,8 @@ home_grippers_before_execute:=false grippers_homed:=true
 ## 失败恢复
 
 明确的轨迹终止错误，如 `CONTROL_FAILED`、`TIMED_OUT`、`INVALID_MOTION_PLAN` 和 `MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE`，可在 `execution_replan_attempts` 上限内恢复。恢复从实测状态开始，只规划失败阶段和后续阶段。
+
+`execution_replan_attempts` 与 `replan_after_grasp` 独立：前者控制实际执行失败后的恢复，后者仅控制抓取后的缓存验证失败。两项都关闭时使用 `execution_replan_attempts:=0 replan_after_grasp:=false`。
 
 相对移动使用原成功解保存的绝对 TCP 终点，避免中途停止后再次走完整段位移；准备阶段保留已选中的关节目标。已完成的夹爪和线缆生成操作不会重放。
 

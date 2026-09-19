@@ -175,12 +175,17 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
         help="maximum replans of unfinished stages after terminal execution failures",
     )
     parser.add_argument(
+        "--replan-after-grasp", type=_parse_bool, default=DEFAULTS.replan_after_grasp,
+        help="allow replanning only if cached trajectories fail measured-scene validation after grasp",
+    )
+    parser.add_argument(
         "--execute-stage-by-stage",
         type=_parse_bool,
         default=DEFAULTS.execute_stage_by_stage,
         help=(
             "execute stages from the same successful full solution; replan only "
-            "after execution failure. False requires no preparation/gripper stages "
+            "after execution failure or explicitly enabled post-grasp validation failure. "
+            "False requires no preparation/gripper stages "
             "and sends one whole-task action without automatic recovery"
         ),
     )
@@ -208,4 +213,3 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
     if args.execution_replan_attempts < 0:
         parser.error("--execution-replan-attempts must be >= 0")
     return args
-

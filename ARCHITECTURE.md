@@ -43,7 +43,7 @@ mtc_prototype.launch.py
 
 `MtcStageSpec` 是领域模型和 MTC 之间的可序列化接口，同时用于阶段话题和诊断。关键点的 `in_slot` 决定段分类，调度器决定双臂顺序，编译器决定具体运动与夹爪阶段。
 
-准备搜索在相同 TCP 位姿下寻找不同 IK 关节配置，并检查后续完整路径。正常执行复用成功解；插入模式在解除固定后用实测抓姿重规划剩余路径，另在可恢复的执行失败后从实际状态重规划未完成阶段。
+准备搜索在相同 TCP 位姿下寻找不同 IK 关节配置，并检查后续完整路径。解除固定后更新实测抓姿，先验证剩余缓存轨迹和插入接近，成功则保留原轨迹；验证失败默认停止，仅显式 `replan_after_grasp=true` 才重规划。可恢复的实际执行失败仍按独立的次数上限从实际状态重规划未完成阶段。
 
 ## 阶段语义
 
@@ -74,6 +74,7 @@ mtc_prototype.launch.py
 | `mtc/preparation_search.py` | IK 候选、组合选择与全程预检 |
 | `mtc/planning.py` | 完整规划重试与成功解保留 |
 | `mtc/cached_execution.py` | 缓存子轨迹执行和失败恢复 |
+| `mtc/cached_validation.py` | 实测场景中的缓存起点、限位和稠密碰撞检查；同步缓存场景的实测附着体 |
 | `mtc/cartesian_validation.py`、`mtc/path_length.py` | TCP 路径约束检查 |
 | `mtc/diagnostics.py` | 失败阶段诊断和统计 |
 | `runtime/config.py` | 启动、CLI 与节点共享默认值 |
@@ -101,7 +102,7 @@ mtc_prototype.launch.py
 
 - `insertion_task/planning.py`：在候选运输解的末态构造连续 MTC 任务，包含右爪开度预览、右臂退出/回位、左臂接近及完整插入碰撞预检；按完整解 ID 缓存相连轨迹，预检段不执行。
 - `mtc/preparation_search.py` / `mtc/planning.py`：通过 continuation validator 接受同时满足运输和孔前接近的候选。后续恢复规划也必须通过同一检查。
-- `mtc/cached_execution.py`：release/verify 后以实测 USB 附着重规划剩余路径，通过后才等待唯一一次 Enter；保持原笛卡尔目标及已选锚点关节末态，避免仅按相同位姿重采样到另一肘/腕分支；不重放闭爪/解除固定。等待后再次检查抓持。
+- `mtc/cached_execution.py` / `mtc/cached_validation.py`：release/verify 后以实测 USB 附着验证剩余缓存及原插入接近，通过后才等待唯一一次 Enter；原轨迹不变，缓存场景效果更新为实测附着。失败默认停止，仅显式允许时重规划，保持原笛卡尔目标及已选锚点关节末态；不重放闭爪/解除固定。等待后再次检查抓持。
 - `insertion_task/motion.py`：插入后退出/回位的 CurrentState 规划和兼容运动辅助函数。
 - `insertion_task/cli.py` / `insertion_skill.launch.py`：连接已有场景，从当前稳定夹持开始规划整段接近，然后复用相同终末流程。
 

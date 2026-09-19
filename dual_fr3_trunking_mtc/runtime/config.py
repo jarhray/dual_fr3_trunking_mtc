@@ -63,6 +63,7 @@ class TrunkingDefaults:
     anchor_max_path_length_ratio: float = 1.5
     planning_attempts: int = 10
     execution_replan_attempts: int = 2
+    replan_after_grasp: bool = False
     trajectory_execution_duration_scaling: float = 10.0
     trajectory_execution_goal_margin: float = 5.0
 

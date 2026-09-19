@@ -57,6 +57,41 @@ class TerminalInsertion:
             model_owner=snapshot.model_owner)
         return self.approach_plan is not None
 
+    def validate_cached_continuation(self, validator):
+        """Check the existing approach/preflight from the validated transport end."""
+        from dual_fr3_maniskill.cable.model import USB_LINK
+        from dual_fr3_maniskill.usb.geometry import SOCKET_NAME, HOLE, measure
+        from dual_fr3_maniskill.usb.insertion import InsertionLimits
+        from dual_fr3_trunking_mtc.mtc.cached_execution import (
+            cache_selected_stages, selected_stage_solution,
+        )
+
+        if self.approach_plan is None:
+            raise RuntimeError('missing cached insertion approach')
+        planned = self.approach_plan.planned
+        opening = selected_stage_solution(planned, 'preview_right_release')
+        if not validator.validate('preview_right_release', opening, gripper=True):
+            return False
+        for item in cache_selected_stages(planned):
+            if item.spec.name == 'insertion_collision_preflight':
+                # Match the original preflight's sole contact exception. This
+                # changes only the validator's copy, never the live scene.
+                validator.scene.allowed_collision_matrix.set_entry(USB_LINK, SOCKET_NAME, True)
+            if not validator.validate(item.spec.name, item.solution):
+                return False
+            if item.spec.name == 'socket_preinsert':
+                limits = InsertionLimits.read(self.config)
+                observation = measure(
+                    validator.scene.get_frame_transform(SOCKET_NAME),
+                    validator.scene.get_frame_transform(USB_LINK),
+                    self.config.get('hole_center_m', HOLE))
+                if (abs(observation['depth_m'] + limits.preinsert_m) > limits.tracking_limit_m or
+                        observation['lateral_error_m'] > limits.lateral_tolerance_m or
+                        observation['orientation_error_rad'] > limits.angle_tolerance_rad):
+                    self.logger.error('[cached-validation] socket_preinsert: measured grasp fails original insertion alignment limits')
+                    return False
+        return True
+
     def command(self, operation):
         response = self.client._call(self.services[operation], Trigger.Request())
         return json.loads(response.message)

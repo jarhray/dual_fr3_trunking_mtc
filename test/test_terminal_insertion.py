@@ -45,6 +45,50 @@ def test_planning_retries_but_never_replays_failed_execution(monkeypatch, execut
     assert calls.count('path_length_gate') == 3
 
 
+@pytest.mark.parametrize('reject', [None, 'right_return_ready', 'alignment', 'insertion_collision_preflight'])
+def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject):
+    import logging
+    import numpy as np
+    from dual_fr3_maniskill.cable.model import USB_LINK
+    from dual_fr3_maniskill.usb.geometry import HOLE, TIP, USB_IN_SOCKET, SOCKET_NAME
+    from dual_fr3_maniskill.usb.insertion import InsertionLimits
+    from dual_fr3_trunking_mtc.mtc import cached_execution
+
+    names = ['withdraw_right', 'right_return_ready', 'socket_preinsert', 'insertion_collision_preflight']
+    motions = {name: object() for name in names}
+    opening, planned = object(), object()
+    events = []
+    monkeypatch.setattr(cached_execution, 'selected_stage_solution',
+                        lambda selected, name: opening if selected is planned and name == 'preview_right_release' else None)
+    monkeypatch.setattr(cached_execution, 'cache_selected_stages', lambda selected: [
+        SimpleNamespace(spec=SimpleNamespace(name=name), solution=motions[name]) for name in names])
+    usb = np.eye(4)
+    usb[:3, :3] = USB_IN_SOCKET
+    usb[:3, 3] = HOLE + [InsertionLimits().preinsert_m, 0., 0.] - USB_IN_SOCKET @ TIP
+    if reject == 'alignment':
+        usb[1, 3] += .01
+    scene = SimpleNamespace(
+        get_frame_transform=lambda frame: usb if frame == USB_LINK else np.eye(4),
+        allowed_collision_matrix=SimpleNamespace(set_entry=lambda *a: events.append(a)),
+    )
+
+    def validate(name, solution, *, gripper=False):
+        assert solution is (opening if gripper else motions[name])
+        events.append(name)
+        return name != reject
+
+    obj = TerminalInsertion.__new__(TerminalInsertion)
+    obj.config, obj.logger = {}, logging.getLogger(__name__)
+    obj.approach_plan = SimpleNamespace(planned=planned)
+    assert obj.validate_cached_continuation(SimpleNamespace(scene=scene, validate=validate)) is (reject is None)
+    prefix = ['preview_right_release', 'withdraw_right', 'right_return_ready']
+    if reject != 'right_return_ready':
+        prefix.append('socket_preinsert')
+        if reject != 'alignment':
+            prefix.extend([(USB_LINK, SOCKET_NAME, True), 'insertion_collision_preflight'])
+    assert events == prefix
+
+
 def test_socket_installation_preserves_existing_collision_permissions():
     from moveit_msgs.msg import AllowedCollisionMatrix, AllowedCollisionEntry
     acm = AllowedCollisionMatrix(entry_names=['plate','trunking','left_fr3_hand','usb_cable_demo_plug'],

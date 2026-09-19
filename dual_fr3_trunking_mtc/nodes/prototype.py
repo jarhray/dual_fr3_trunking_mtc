@@ -294,7 +294,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     cable_controller=cable_controller,
                     gripper_profiles=gripper_profiles,
                     planner=remaining_planner,
-                    replan_after_grasp=terminal_insertion is not None,
+                    cached_continuation_validator=(
+                        terminal_insertion.validate_cached_continuation
+                        if terminal_insertion is not None else None),
                     confirmation_callback=lambda spec: confirm_stage(
                         spec, read_controlling_terminal, logger,
                     ),
