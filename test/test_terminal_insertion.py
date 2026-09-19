@@ -45,7 +45,7 @@ def test_planning_retries_but_never_replays_failed_execution(monkeypatch, execut
     assert calls.count('path_length_gate') == 3
 
 
-@pytest.mark.parametrize('reject', [None, 'right_return_ready', 'alignment', 'insertion_collision_preflight'])
+@pytest.mark.parametrize('reject', [None, 'recoverable_alignment', 'right_return_ready', 'alignment', 'insertion_collision_preflight'])
 def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject):
     import logging
     import numpy as np
@@ -67,6 +67,8 @@ def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject
     usb[:3, 3] = HOLE + [InsertionLimits().preinsert_m, 0., 0.] - USB_IN_SOCKET @ TIP
     if reject == 'alignment':
         usb[1, 3] += .01
+    if reject == 'recoverable_alignment':
+        usb[1, 3] += .001  # inside servo capture, outside direct insertion gate
     scene = SimpleNamespace(
         get_frame_transform=lambda frame: usb if frame == USB_LINK else np.eye(4),
         allowed_collision_matrix=SimpleNamespace(set_entry=lambda *a: events.append(a)),
@@ -80,7 +82,7 @@ def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject
     obj = TerminalInsertion.__new__(TerminalInsertion)
     obj.config, obj.logger = {}, logging.getLogger(__name__)
     obj.approach_plan = SimpleNamespace(planned=planned)
-    assert obj.validate_cached_continuation(SimpleNamespace(scene=scene, validate=validate)) is (reject is None)
+    assert obj.validate_cached_continuation(SimpleNamespace(scene=scene, validate=validate)) is (reject in (None, 'recoverable_alignment'))
     prefix = ['preview_right_release', 'withdraw_right', 'right_return_ready']
     if reject != 'right_return_ready':
         prefix.append('socket_preinsert')
@@ -127,7 +129,8 @@ def test_right_returns_before_insertion_and_left_releases_only_after_retention(f
         if op == failure: raise RuntimeError('injected failure')
         if op == 'status': return dict(return_complete=False, state='not_started')
         if op == 'target': return dict(**pose, end_tcp_pose=pose)
-        if op == 'heartbeat': return dict(state='retained', insertion_success=True)
+        if op == 'heartbeat':
+            return dict(state='retained' if 'start' in events else 'aligned', insertion_success='start' in events)
         return {}
     obj.command = command
     def motion(name, *args, **kwargs):
@@ -149,6 +152,7 @@ def test_right_returns_before_insertion_and_left_releases_only_after_retention(f
     else:
         assert events.index('open_right') < events.index('withdraw_right') < events.index('right_return_ready')
         assert events.index('right_returned') < events.index('target') < events.index('start')
+        assert events.index('socket_preinsert') < events.index('align') < events.index('start')
         if failure == 'retained':
             assert 'open_left' not in events
         else:
@@ -231,3 +235,22 @@ def test_optional_finish_stages_preserve_cancel_and_order(option, absent):
     assert obj.execute(None)
     assert events[:5] == ['status', 'release_right', 'return_right', 'align_left', 'feedback_insert']
     assert absent not in events and events[-1] == 'cancel'
+
+
+def test_failed_local_alignment_never_starts_insertion_or_releases_left():
+    obj = TerminalInsertion.__new__(TerminalInsertion)
+    obj.config, obj.saved_acm = {}, None
+    events = []
+    obj.logger = SimpleNamespace(info=lambda *a: None, error=lambda *a: None, exception=lambda *a: None)
+    obj.approach_plan = SimpleNamespace(execute=events.append)
+    obj.release_right = lambda _: events.append('release_right')
+    obj.return_right = lambda: events.append('return_right')
+    def command(op):
+        events.append(op)
+        if op == 'status': return dict(state='not_started', return_complete=False)
+        if op == 'heartbeat': return dict(state='blocked', reason='local_path_collision')
+        return {}
+    obj.command = command
+    assert not obj.execute(None)
+    assert events == ['status', 'release_right', 'return_right', 'target',
+                      'socket_preinsert', 'align', 'heartbeat', 'cancel']

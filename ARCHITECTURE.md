@@ -106,7 +106,7 @@ mtc_prototype.launch.py
 - `insertion_task/motion.py`：插入后退出/回位的 CurrentState 规划和兼容运动辅助函数。
 - `insertion_task/cli.py` / `insertion_skill.launch.py`：连接已有场景，从当前稳定夹持开始规划整段接近，然后复用相同终末流程。
 
-插入前使用缓存 MoveIt 轨迹；start 仍按实际 USB 位姿检查原对齐阈值，漂移超限则停止。删除了末尾临时重规划微小对齐动作；不改变孔前目标或阈值。右臂退出仍属于 `right_return`，失败保持原上报语义。执行失败不自动重放部分轨迹。
+插入前使用缓存 MoveIt 轨迹，随后调用 align 完成孔前局部闭环微调；仅在 2 mm / 3° 捕获范围内，以实测 USB 尖端和当前抓姿生成连续小步 IK，不调用 OMPL 重规划。推荐 YAML 的 `local_collision_check=entry` 只在局部入口校验实测状态，之后微调/插入连续执行本地 IK；`per_step` 保留原异步短步校验。两种模式均保留 PhysX 接触和载荷/抓持/关节保护。连续达到微调精度和低速条件后，start 仍按实际 USB 位姿检查原插入阈值。超出范围或检查失败则停止并保持夹爪。右臂退出仍属于 `right_return`，失败保持原上报语义。执行失败不自动重放部分轨迹。
 
 物理包 `usb/geometry.py` 统一孔壁调整、USB 关键点及抓姿变换；MTC 保留三角网格消息构造，
 `usb/scene.py` 保留凸分解、支撑反力采样和实体/约束生命周期。`usb/insertion.py` 的纯策略用仿真时间

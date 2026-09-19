@@ -57,9 +57,9 @@ ros2 launch dual_fr3_trunking_mtc mtc_prototype.launch.py \
   maniskill_python:="$PWD/.venv/bin/python"
 ```
 
-准备自动完成：整段规划预检 → 张开 → 定位 USB/线缆 → 接近 → 双爪闭合 → 解除世界固定 → 稳定验证。随后用实测抓姿更新规划附着，重新规划下降、走线和孔前接近；通过后只等待一次 Enter，开始任务。输入 `q` 中止；无可用终端输入时中止。自动仿真可加 `preparation_interactive:=false`。
+准备自动完成：整段规划预检 → 张开 → 定位 USB/线缆 → 接近 → 双爪闭合 → 解除世界固定 → 稳定验证。随后用实测抓姿更新规划附着，验证缓存的下降、走线和孔前接近轨迹；通过后只等待一次 Enter，开始任务。输入 `q` 中止；无可用终端输入时中止。自动仿真可加 `preparation_interactive:=false`。
 
-从准备到孔前均使用 MoveIt；末端右臂释放退出/回位、左臂接近和完整插入直线预检一起检查，不能只凭走线可规划就开始执行。物理插入仍使用原反馈控制。实测抓姿漂移或环境变化仍可能使执行停止，预规划不代替运行时验证。
+从准备到孔前均使用 MoveIt；末端右臂释放退出/回位、左臂接近和完整插入直线预检一起检查，不能只凭走线可规划就开始执行。缓存接近完成后自动调用孔前局部闭环微调，在缺省 2 mm / 3° 范围内修正实际 USB 尖端。推荐 YAML 中达到 0.2 mm / 0.5° 并稳定 0.1 s 后，以 2 mm/s 进入反馈插入；局部入口做一次 MoveIt 状态检查，后续运行有界本地 IK，保留 PhysX 接触和载荷/抓持/关节保护。设置 `insertion.local_collision_check: per_step` 可恢复逐短步校验，参数见[孔前微调说明](../dual_fr3_maniskill/docs/insertion_parameters.md#孔前局部闭环微调2026-09-19)。实测抓姿漂移或环境变化仍可能使执行停止，预规划不代替运行时验证。
 
 ManiSkill 在闭合前创建 USB。`load_cable:=false` 不创建线缆，但保留双臂准备、下降和原后续 MTC 轨迹，作为 USB 搬运调试；`maniskill_cable:=false` 只运行机器人；`execute:=false` 不会生成物体。详见 [MTC 线缆接口](../dual_fr3_maniskill/docs/mtc_cable.md)。
 

@@ -6,7 +6,7 @@ import time
 from moveit_msgs.msg import PlanningScene, PlanningSceneComponents
 from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
 from std_srvs.srv import Trigger
-from dual_fr3_maniskill.usb.insertion import ACTIVE_STATES, SERVICE_OPERATIONS, SERVICE_PREFIX
+from dual_fr3_maniskill.usb.insertion import ACTIVE_STATES, ALIGNMENT_STATES, SERVICE_OPERATIONS, SERVICE_PREFIX
 
 import dual_fr3_trunking_mtc.insertion_task.motion as insertion_motion
 import dual_fr3_trunking_mtc.insertion_task.planning_scene as insertion_planning_scene
@@ -62,6 +62,7 @@ class TerminalInsertion:
         from dual_fr3_maniskill.cable.model import USB_LINK
         from dual_fr3_maniskill.usb.geometry import SOCKET_NAME, HOLE, measure
         from dual_fr3_maniskill.usb.insertion import InsertionLimits
+        from dual_fr3_maniskill.usb.alignment import AlignmentLimits, error_norm
         from dual_fr3_trunking_mtc.mtc.cached_execution import (
             cache_selected_stages, selected_stage_solution,
         )
@@ -81,14 +82,14 @@ class TerminalInsertion:
                 return False
             if item.spec.name == 'socket_preinsert':
                 limits = InsertionLimits.read(self.config)
+                alignment = AlignmentLimits.read(self.config.get('alignment', {}), limits)
                 observation = measure(
                     validator.scene.get_frame_transform(SOCKET_NAME),
                     validator.scene.get_frame_transform(USB_LINK),
                     self.config.get('hole_center_m', HOLE))
-                if (abs(observation['depth_m'] + limits.preinsert_m) > limits.tracking_limit_m or
-                        observation['lateral_error_m'] > limits.lateral_tolerance_m or
-                        observation['orientation_error_rad'] > limits.angle_tolerance_rad):
-                    self.logger.error('[cached-validation] socket_preinsert: measured grasp fails original insertion alignment limits')
+                if (error_norm(observation, limits.preinsert_m) > alignment.capture_translation_m or
+                        observation['orientation_error_rad'] > alignment.capture_angle_rad):
+                    self.logger.error('[cached-validation] socket_preinsert: measured grasp outside local alignment capture range')
                     return False
         return True
 
@@ -158,8 +159,18 @@ class TerminalInsertion:
         if float(self.config.get('approach_lift_m', 0.)):
             self.approach_plan.execute('socket_above_approach')
         self.approach_plan.execute('socket_preinsert')
-        # start observes the actual USB and applies the existing alignment
-        # limits. Grasp drift stops here; a cached pose is never proof of alignment.
+        self.command('align')
+        wall_start = time.monotonic()
+        while True:
+            status = self.command('heartbeat')
+            if status['state'] not in ALIGNMENT_STATES:
+                break
+            if time.monotonic() - wall_start > max(120., 30 * self.config.get('alignment', {}).get('timeout_s', 20.)):
+                raise RuntimeError('Local alignment wall-time watchdog')
+            time.sleep(.1)
+        self.logger.info('local alignment result: %s', json.dumps(status))
+        if status['state'] != 'aligned':
+            raise RuntimeError('Local alignment failed: ' + status['state'] + ' ' + status.get('reason', ''))
 
     def feedback_insert(self):
         self.command('start')
