@@ -34,6 +34,24 @@ def _observed_pose(snapshot, key):
         raise RuntimeError(f"Invalid measured USB {key}: {exc}") from exc
 
 
+def _require_grasp_observation(snapshot, *, relative_frame=None):
+    """Validate the selected grasp contract without promoting an estimate to truth."""
+    if not isinstance(snapshot, dict):
+        raise RuntimeError('USB status must contain a grasp observation')
+    if snapshot.get('pose_source') == 'calibrated_estimate':
+        if (snapshot.get('observation_valid') is not True or
+                snapshot.get('gripper_closed') is not True or
+                snapshot.get('grasp_assumption_valid') is not True or
+                snapshot.get('calibration_verified') is not True or
+                not isinstance(snapshot.get('calibration_id'), str) or
+                not snapshot['calibration_id'].strip()):
+            raise RuntimeError('USB status lacks a valid calibrated grasp assumption; refusing attachment')
+    elif snapshot.get('state') != 'stable' or snapshot.get('external_support') is not False:
+        raise RuntimeError('USB status no longer confirms a released stable grasp; refusing attachment')
+    if relative_frame is not None and snapshot.get('relative_frame') != relative_frame:
+        raise RuntimeError('USB status has an unexpected grasp reference frame; refusing attachment')
+
+
 def preparation_cable_config(backend, enabled, preparation_enabled, config_path):
     if backend != "maniskill" or not enabled:
         return ""
@@ -131,17 +149,15 @@ class SimulationCableController:
         scene = attached_usb_scene(config_path, orientation_direction=orientation_direction)
         snapshot = json.loads(self._call(self.status, Trigger.Request()).message)
         obj = scene.robot_state.attached_collision_objects[0].object
-        if (not isinstance(snapshot, dict) or snapshot.get('state') != 'stable' or
-                snapshot.get('external_support') is not False or
-                snapshot.get('relative_frame') != obj.header.frame_id):
-            raise RuntimeError('USB status no longer confirms a released stable grasp; refusing attachment')
+        _require_grasp_observation(snapshot, relative_frame=obj.header.frame_id)
         obj.mesh_poses = [_observed_pose(snapshot, 'relative_pose')]
         self._call(self.apply, ApplyPlanningScene.Request(scene=scene))
         return True
 
     def ensure_grasp(self):
-        """Fail before subsequent transport if released-grasp monitoring is not stable."""
-        self._call(self.status, Trigger.Request())
+        """Require the same measured or calibrated contract before transport."""
+        snapshot = json.loads(self._call(self.status, Trigger.Request()).message)
+        _require_grasp_observation(snapshot)
         return True
 
     def close(self):

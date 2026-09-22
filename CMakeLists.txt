@@ -11,6 +11,8 @@ install(PROGRAMS
   scripts/trunking_plan_node.py
   scripts/trunking_mtc_prototype.py
   scripts/usb_insertion_skill.py
+  scripts/real_insertion_runtime.py
+  scripts/replay_insertion.py
   scripts/trunking_readiness_gate.py
   scripts/trunking_segment_executor.py
   scripts/trunking_step_by_step.py
@@ -20,8 +22,10 @@ install(PROGRAMS
 install(DIRECTORY
   launch
   config
+  docs
   DESTINATION share/${PROJECT_NAME}
 )
+install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
@@ -30,6 +34,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_terminal_insertion test/test_terminal_insertion.py)
   ament_add_pytest_test(test_mtc_module_layout test/test_mtc_module_layout.py)
   ament_add_pytest_test(test_insertion_skill test/test_insertion_skill.py)
+  ament_add_pytest_test(test_real_insertion test/test_real_insertion.py)
+  ament_add_pytest_test(test_insertion_replay test/test_insertion_replay.py)
   ament_add_pytest_test(test_mtc_prototype test/test_mtc_prototype.py)
   ament_add_pytest_test(test_path_length test/test_path_length.py)
   ament_add_pytest_test(test_diagnostics test/test_diagnostics.py)

@@ -102,6 +102,10 @@ ros2 launch dual_fr3_trunking_mtc insertion_skill.launch.py
 
 完整返回后重复调用直接成功返回；进行中或失败后调用拒绝重放。失败按现有 `/usb_cable_demo/reset` 清理后重新准备夹持。独立调度时预先启用物理插座，见 [独立调用说明](../dual_fr3_maniskill/docs/usb_insertion.md#独立调用)。
 
+真机已有夹持/走线完成后，可使用新增的 `backend:=real` 独立插入入口，默认只规划。
+它与仿真共用策略，以标定关系估计插头位姿，到位后保持夹持。配置模板、只读检查、控制器加载和离线回放见
+[真机插入迁移](docs/real_insertion.md)。模板标定和执行开关均未启用，尚未进行真机验证。
+
 ## 常用参数
 
 | 参数 | 默认值 | 用途 |

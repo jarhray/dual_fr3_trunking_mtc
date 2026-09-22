@@ -52,7 +52,11 @@ def approach_goals(scene, config):
     goals = []
     limits = InsertionLimits.read(config)
     for depth in (-limits.preinsert_m, limits.target_depth_m):
-        transform = tcp_goal(base, tcp, usb, depth, config.get('hole_center_m', HOLE))
+        geometry = config.get('calibration', {}) if config.get('observation_mode') == 'calibrated_estimate' else {}
+        from dual_fr3_maniskill.usb.geometry import TIP
+        transform = tcp_goal(base, tcp, usb, depth,
+            geometry.get('hole_center_m', config.get('hole_center_m', HOLE)),
+            tip_in_usb_m=geometry.get('tip_in_usb_m', TIP))
         goals.append(PoseStamped(
             header=Header(frame_id=scene.planning_frame),
             pose=_observed_pose({'pose': pose_dict(transform)}, 'pose')))

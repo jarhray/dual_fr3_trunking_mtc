@@ -9,7 +9,7 @@ import sys
 from rclpy.utilities import remove_ros_args
 
 from dual_fr3_trunking_mtc.execution.gripper import GripperController, GripperProfileRegistry
-from dual_fr3_trunking_mtc.insertion_task.pipeline import TerminalInsertion
+from dual_fr3_trunking_mtc.insertion_task.pipeline import TerminalInsertion, estimated_hold_valid
 from dual_fr3_trunking_mtc.mtc.task_builder import import_mtc_modules
 from dual_fr3_trunking_mtc.runtime.arguments import _default_gripper_profiles_file
 from dual_fr3_trunking_mtc.runtime.config import parse_bool
@@ -19,7 +19,7 @@ from dual_fr3_trunking_mtc.execution.simulation_cable import SimulationCableCont
 
 def run_skill(terminal, gripper, *, execute):
     status = terminal.command('status')
-    if status['return_complete']:
+    if status['return_complete'] or estimated_hold_valid(status):
         return True
     if status['state'] != 'not_started':
         raise RuntimeError('Insertion skill already attempted; reset before replay')
@@ -32,11 +32,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cable-config', default='')
     parser.add_argument('--gripper-profiles-file', default=_default_gripper_profiles_file())
-    parser.add_argument('--execute', type=parse_bool, default=True)
+    parser.add_argument('--execute', type=parse_bool, default=None)
+    parser.add_argument('--backend', choices=('maniskill', 'real'), default='maniskill')
     args = parser.parse_args(remove_ros_args(args=[parser.prog, *(sys.argv[1:] if argv is None else argv)])[1:])
+    if args.execute is None:
+        args.execute = args.backend == 'maniskill'
     from dual_fr3_maniskill.scenes import resolve_cable_config
 
-    config = resolve_cable_config(args.cable_config, scene='trunking_cable')
+    if args.backend == 'real' and not args.cable_config:
+        raise ValueError('Real insertion requires an explicit calibrated configuration')
+    config = args.cable_config if args.backend == 'real' else resolve_cable_config(args.cable_config, scene='trunking_cable')
     logger = make_logger()
     rclcpp, _, _ = import_mtc_modules()
     client = gripper = None
@@ -44,11 +49,22 @@ def main(argv=None):
     try:
         node = rclcpp.Node('usb_insertion_skill', rclcpp.NodeOptions(
             automatically_declare_parameters_from_overrides=True))
-        client = SimulationCableController(backend='maniskill')
+        real_config = None
+        if args.backend == 'real':
+            from dual_fr3_trunking_mtc.insertion_task.real_backend import RealInsertionClient
+            client = RealInsertionClient(config)
+            real_config = client.config['insertion']
+            if args.execute:
+                status = client.checked_status()
+                if not status.get('execution_enabled'):
+                    raise RuntimeError('Real runtime is read-only')
+        else:
+            client = SimulationCableController(backend='maniskill')
         profiles = GripperProfileRegistry.load(args.gripper_profiles_file)
         if args.execute:
-            gripper = GripperController(profiles, 'maniskill', use_sim_time=True)
-        terminal = TerminalInsertion(client, config, node, logger)
+            gripper = GripperController(profiles, 'franka' if args.backend == 'real' else 'maniskill',
+                                        use_sim_time=args.backend != 'real')
+        terminal = TerminalInsertion(client, config, node, logger, config=real_config)
         return 0 if run_skill(terminal, gripper, execute=args.execute) else 4
     except Exception:
         logger.exception('independent insertion skill stopped')

@@ -6,9 +6,9 @@
 
 | 包 | 职责 |
 | --- | --- |
-| `dual_fr3_trunking_mtc` | 关键点解析、双臂调度、MTC 阶段编译、准备搜索与执行 |
-| `dual_fr3_moveit_config` | 双臂模型、规划组、MoveIt、后端启动与控制器映射 |
-| `dual_fr3_maniskill` | 机器人物理、ROS 动作桥接、线缆模型及场景 |
+| `dual_fr3_trunking_mtc` | 关键点解析、双臂调度、MTC 阶段编译、准备搜索与执行、插入任务及真机适配 |
+| `dual_fr3_moveit_config` | 双臂模型、规划组、MoveIt、后端启动、控制器映射及局部关节目标执行器 |
+| `dual_fr3_maniskill` | 机器人物理、ROS 动作桥接、线缆模型及场景、可独立导入的插入策略与观测计算 |
 
 物理包接收上层提供的最终 URDF/SRDF，不反向依赖 MoveIt 配置包。MTC 与 MoveGroup 使用同一套模型构造逻辑。
 
@@ -84,6 +84,9 @@ mtc_prototype.launch.py
 | `insertion_task/pipeline.py` | 终末动作编排、服务调用、阶段失败上报、临时 ACM 的恢复时机 |
 | `insertion_task/motion.py` | 末端 MoveTo/MoveRelative 构造、测量初态规划重试、单次执行 |
 | `insertion_task/planning_scene.py` | MoveIt 插座网格消息、安装碰撞对、USB 实测解除附着与夹持碰撞对 |
+| `insertion_task/real_backend.py` | 真机服务客户端、配置一致性和标定抓姿同步 |
+| `insertion_task/real_session.py`、`local_kinematics.py` | 共用策略的会话管理、真机关节链与局部 IK |
+| `insertion_task/real_runtime.py`、`replay.py` | 真机反馈、控制器接管和目标发布；离线策略回放 |
 | `nodes/planner.py`、`nodes/markers.py` | 可视化节点、重载和 RViz 标记 |
 | `nodes/prototype.py` | 顶层编排与兼容入口 |
 
@@ -98,7 +101,8 @@ mtc_prototype.launch.py
 
 ## 终末插入边界
 
-`TerminalInsertion.execute` 保留右爪释放、右臂退出回位、左臂接近、反馈插入、固定确认、左爪释放、左臂退出回位的顺序。
+`TerminalInsertion.execute` 的原仿真真值模式保留右爪释放、右臂退出回位、左臂接近、反馈插入、固定确认、左爪释放、左臂退出回位的顺序。
+估计观测模式到位后保持夹持；真机还需确认执行器已停稳，不进入固定、松爪或退出步骤。
 
 - `insertion_task/planning.py`：在候选运输解的末态构造连续 MTC 任务，包含右爪开度预览、右臂退出/回位、左臂接近及完整插入碰撞预检；按完整解 ID 缓存相连轨迹，预检段不执行。
 - `mtc/preparation_search.py` / `mtc/planning.py`：通过 continuation validator 接受同时满足运输和孔前接近的候选。后续恢复规划也必须通过同一检查。
@@ -120,6 +124,24 @@ USB-only 追加 `load_cable:=false`。参数来源、坐标系、默认值差异
 [初轮重构验证](../dual_fr3_maniskill/docs/insertion_refactor_validation.md) 和
 [本轮工作流验证](../dual_fr3_maniskill/docs/insertion_workflow_validation.md)。
 
+### 真机插入的代码归属
+
+真机独立入口 `insertion_skill.launch.py backend:=real` 复用终末编排和接近规划，
+`real_insertion_runtime.launch.py` 连接已经运行的机器人环境。两者属于任务包；
+完整走线入口的真机自动收尾暂未接入插入。
+
+`dual_fr3_moveit_config/src/controllers/joint_target_controller.cpp` 实现
+`dual_fr3_moveit_config/JointTargetController` 插件；头文件位于
+`include/dual_fr3_moveit_config/controllers/`，`msg/JointTarget.msg` 和
+`msg/JointTargetState.msg` 定义关节目标与执行反馈。
+控制器负责有界跟踪、目标时效和停稳保持，不承担插入状态机、IK 或双臂调度。
+控制配置与插件随已有机器人环境包安装，不另设 ROS 包。
+
+共享 `usb/insertion.py`、`alignment.py`、`geometry.py` 和 `observation.py`
+不加载物理引擎；真机适配读取标定关系和机器人自带反馈，仿真适配保留在 `usb/scene.py`、
+`bridge.py`。运行边界见 [真机插入说明](docs/real_insertion.md)，
+执行器接口见 [控制器说明](../dual_fr3_moveit_config/docs/insertion_controller.md)。
+
 ## 验证边界
 
 `test/` 覆盖规划与调度、配置、准备搜索、路径约束、执行恢复、夹爪和后端启动。离线测试不代表真机或 GPU 完整任务成功。测试入口见 [ManiSkill 环境与验证](../dual_fr3_maniskill/docs/setup.md)，运行诊断见[执行说明](docs/execution.md)。
@@ -132,7 +154,7 @@ dual_fr3_trunking_mtc/
 ├── stages/          可序列化阶段规格与编译
 ├── mtc/             MTC 对象构造、整段规划、缓存执行及恢复
 ├── execution/       夹爪 action 与物理线缆服务客户端
-├── insertion_task/  终末流程、连续接近规划、场景同步、独立 skill CLI
+├── insertion_task/  终末流程、连续接近规划、场景同步、真机适配与独立 skill CLI
 ├── nodes/           ROS 入口装配、就绪门控、可视化、旧诊断执行器
 ├── runtime/         默认值、CLI 解析、日志和阶段发布
 └── _compat/         旧根模块的兼容别名

@@ -46,7 +46,8 @@ def test_planning_retries_but_never_replays_failed_execution(monkeypatch, execut
 
 
 @pytest.mark.parametrize('reject', [None, 'recoverable_alignment', 'right_return_ready', 'alignment', 'insertion_collision_preflight'])
-def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject):
+@pytest.mark.parametrize('estimated_geometry', [False, True])
+def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject, estimated_geometry):
     import logging
     import numpy as np
     from dual_fr3_maniskill.cable.model import USB_LINK
@@ -64,7 +65,9 @@ def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject
         SimpleNamespace(spec=SimpleNamespace(name=name), solution=motions[name]) for name in names])
     usb = np.eye(4)
     usb[:3, :3] = USB_IN_SOCKET
-    usb[:3, 3] = HOLE + [InsertionLimits().preinsert_m, 0., 0.] - USB_IN_SOCKET @ TIP
+    hole = HOLE + [0., .003, -.002] if estimated_geometry else HOLE
+    tip = TIP + [.001, .004, .002] if estimated_geometry else TIP
+    usb[:3, 3] = hole + [InsertionLimits().preinsert_m, 0., 0.] - USB_IN_SOCKET @ tip
     if reject == 'alignment':
         usb[1, 3] += .01
     if reject == 'recoverable_alignment':
@@ -80,7 +83,9 @@ def test_cached_continuation_is_validated_without_replanning(monkeypatch, reject
         return name != reject
 
     obj = TerminalInsertion.__new__(TerminalInsertion)
-    obj.config, obj.logger = {}, logging.getLogger(__name__)
+    obj.config = (dict(observation_mode='calibrated_estimate',
+        calibration=dict(hole_center_m=hole, tip_in_usb_m=tip)) if estimated_geometry else {})
+    obj.logger = logging.getLogger(__name__)
     obj.approach_plan = SimpleNamespace(planned=planned)
     assert obj.validate_cached_continuation(SimpleNamespace(scene=scene, validate=validate)) is (reject in (None, 'recoverable_alignment'))
     prefix = ['preview_right_release', 'withdraw_right', 'right_return_ready']
@@ -254,3 +259,72 @@ def test_failed_local_alignment_never_starts_insertion_or_releases_left():
     assert not obj.execute(None)
     assert events == ['status', 'release_right', 'return_right', 'target',
                       'socket_preinsert', 'align', 'heartbeat', 'cancel']
+
+
+def estimated_hold_status(**changes):
+    observation = dict(observation_valid=True, pose_source='calibrated_estimate',
+        calibration_id='synthetic_terminal_test', gripper_closed=True, grasp_assumption_valid=True,
+        feedback_available=True, depth_m=.010, lateral_error_m=0., orientation_error_rad=0.,
+        resistance_N=0., lateral_N=0., torque_Nm=0., relative_speed_m_s=0., relative_angular_rad_s=0.)
+    value = dict(state='inserted_unretained', return_complete=False, insertion_success=True,
+        outcome='estimated_reached', physical_success_verified=False,
+        local_controller_owns_left_arm=True, observation=observation)
+    value.update(changes)
+    return value
+
+
+def test_estimated_hold_uses_the_session_contact_limits():
+    from dataclasses import asdict
+    from dual_fr3_maniskill.usb.insertion import InsertionLimits
+    from dual_fr3_trunking_mtc.insertion_task.pipeline import estimated_hold_valid
+    status = estimated_hold_status(limits=asdict(InsertionLimits(axial_limit_N=1.)))
+    status['observation']['resistance_N'] = 2.
+    assert not estimated_hold_valid(status)
+
+
+@pytest.mark.parametrize('backend', ['maniskill', 'real'])
+@pytest.mark.parametrize('failure', [None, 'missing_outcome', 'failed_state', 'lost_ownership',
+                                    'lost_grasp', 'invalid_feedback', 'missing_success', 'not_stopped'])
+def test_estimated_completion_preserves_hold_only_when_current_contract_is_valid(backend, failure):
+    obj = TerminalInsertion.__new__(TerminalInsertion)
+    # Legacy completion switches must never open/release after estimated arrival.
+    obj.config = dict(observation_mode='calibrated_estimate', retain_after_success=True,
+                      release_after_retention=True, return_after_release=True)
+    obj.saved_acm = None
+    obj.approach_plan = object()
+    obj.logger = SimpleNamespace(info=lambda *a: None, error=lambda *a: None, exception=lambda *a: None)
+    final = estimated_hold_status(backend=backend, executor_state='STOPPED', stop_acknowledged=True)
+    if failure == 'missing_outcome':
+        final['outcome'] = None
+    elif failure == 'failed_state':
+        final['state'] = 'feedback_unavailable'  # historical success must not hide a new fault
+    elif failure == 'lost_ownership':
+        final['local_controller_owns_left_arm'] = False
+    elif failure == 'lost_grasp':
+        final['observation']['gripper_closed'] = False
+    elif failure == 'invalid_feedback':
+        final['observation']['observation_valid'] = False
+    elif failure == 'missing_success':
+        final['insertion_success'] = False
+    elif failure == 'not_stopped':
+        final['executor_state'], final['stop_acknowledged'] = 'STOPPING', False
+    events = []
+    def command(operation):
+        events.append(operation)
+        if operation == 'status':
+            return (dict(state='not_started', return_complete=False) if events.count('status') == 1
+                    else final)
+        return {}
+    obj.command = command
+    obj.release_right = lambda controller: events.append('release_right')
+    obj.return_right = lambda: events.append('return_right')
+    obj.align_left = lambda: events.append('align_left')
+    obj.feedback_insert = lambda: events.append('feedback_insert')
+    obj.release_left = lambda *args: pytest.fail('estimated completion opened the left gripper')
+    obj.return_left = lambda: pytest.fail('estimated completion returned the left arm')
+    accepted = failure is None or (failure == 'not_stopped' and backend == 'maniskill')
+    assert obj.execute(None) is accepted
+    assert events[:6] == ['status', 'release_right', 'return_right', 'align_left',
+                          'feedback_insert', 'status']
+    assert ('cancel' not in events) is accepted
+    assert 'retained' not in events and 'released' not in events and 'returned' not in events

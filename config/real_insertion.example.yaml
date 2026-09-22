@@ -1,0 +1,100 @@
+# Template only. Every dimension, transform, force and timing limit below is
+# an example, not a commissioned hardware setting. All execution gates are off.
+insertion:
+  observation_mode: calibrated_estimate
+  preserve_mesh_geometry: true  # Do not enlarge the original socket CAD aperture.
+  collision_mesh: meshes/usb_base_collision.stl
+  cavity_depth_m: 0.011
+  end_clearance_m: 0.001
+  target_depth_m: 0.010
+  preinsert_m: 0.008
+  max_advance_m: 0.022
+  speed_m_s: 0.0005
+  acceleration_m_s2: 0.001
+  resistance_gain_m_N_s: 0.0002
+  filter_tau_s: 0.04
+  axial_limit_N: 5.0
+  lateral_limit_N: 2.0
+  torque_limit_Nm: 0.04
+  lateral_tolerance_m: 0.0001
+  angle_tolerance_rad: 0.0087
+  depth_tolerance_m: 0.00015
+  tracking_limit_m: 0.0005
+  joint_speed_rad_s: 0.05
+  blocked_s: 1.5
+  timeout_s: 60.0
+  hold_s: 0.3
+  retain_after_success: false
+  release_after_retention: false
+  return_after_release: false
+  local_collision_check: per_step
+  planning_attempts: 5
+  planning_timeout_s: 10.0
+  max_path_length_ratio: 3.0
+  alignment:
+    capture_translation_m: 0.002
+    capture_angle_rad: 0.03
+    position_tolerance_m: 0.0001
+    angle_tolerance_rad: 0.0087
+    speed_m_s: 0.0005
+    angular_speed_rad_s: 0.01
+    hold_s: 0.3
+  calibration:
+    calibration_id: UNVERIFIED_EXAMPLE
+    verified: false
+    grasp_assumption_valid: false
+    world_T_socket:
+      - [1, 0, 0, 0.545]
+      - [0, 1, 0, 0.280]
+      - [0, 0, 1, 0.010]
+      - [0, 0, 0, 1]
+    tcp_T_usb:
+      - [1, 0, 0, 0]
+      - [0, 1, 0, 0]
+      - [0, 0, 1, 0]
+      - [0, 0, 0, 1]
+    tip_in_usb_m: [0, 0.0179, 0]
+    hole_center_m: [0, 0.0175, 0.0686]
+    closed_width_range_m: [0.002, 0.020]
+    max_age_s: 0.1
+    max_gripper_age_s: 0.25
+    max_sample_gap_s: 0.2
+    uncertainty_translation_m: 0.001
+    uncertainty_angle_rad: 0.02
+    max_translation_uncertainty_m: 0.0001
+    max_angle_uncertainty_rad: 0.0087
+    wrench_sign: -1  # Verify with known-direction contact; libfranka reaction convention.
+    wrench_bias: [0, 0, 0, 0, 0, 0]  # world axes, K origin, raw signal before sign.
+real_runtime:
+  limits_verified: false
+  frequency_hz: 50.0
+  max_dt_s: 0.1
+  command_valid_for_s: 0.08
+  controller_state_max_age_s: 0.1
+  heartbeat_timeout_s: 0.5
+  collision_timeout_s: 0.025
+  local_collision_check: per_step
+  fk_translation_tolerance_m: 0.001
+  fk_angle_tolerance_rad: 0.01
+  world_T_base:
+    - [1, 0, 0, 0.175]
+    - [0, 1, 0, 0.350]
+    - [0, 0, 1, 0]
+    - [0, 0, 0, 1]
+  ee_T_tcp:  # Must be measured/configured; identity is a placeholder.
+    - [1, 0, 0, 0]
+    - [0, 1, 0, 0]
+    - [0, 0, 1, 0]
+    - [0, 0, 0, 1]
+  right_min_half_width_m: 0.014
+  right_ready_q: [0, -0.7853981634, 0, -2.3561944902, 0, 1.5707963268, 0.7853981634]
+  controller_manager: /left/controller_manager
+  controller_path: /left/left_insertion_controller
+  trajectory_controller: left_fr3_arm_controller
+  insertion_controller: left_insertion_controller
+  service_prefix: /real/usb/insertion/
+  robot_state_topic: /left/left_franka_robot_state_broadcaster/robot_state
+  gripper_topic: /left_franka_gripper/joint_states
+  right_robot_joint_topic: /right/franka/joint_states
+  right_gripper_topic: /right_franka_gripper/joint_states
+  record_path: ''

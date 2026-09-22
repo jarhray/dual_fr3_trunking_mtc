@@ -48,9 +48,10 @@ def socket_collision_object(config, status):
     for offset in range(84, len(raw), 50):
         values = struct.unpack_from('<12fH', raw, offset)
         vertices.extend(values[index:index + 3] for index in (3, 6, 9))
-    vertices = adjust_hole_vertices(
-        vertices, config.get('clearance_yz_m', DEFAULT_CLEARANCE_YZ_M),
-        config.get('hole_center_m', HOLE))
+    if not config.get('preserve_mesh_geometry', False):
+        vertices = adjust_hole_vertices(
+            vertices, config.get('clearance_yz_m', DEFAULT_CLEARANCE_YZ_M),
+            config.get('hole_center_m', HOLE))
     mesh = Mesh(
         vertices=[Point(x=float(x), y=float(y), z=float(z)) for x, y, z in vertices],
         triangles=[MeshTriangle(vertex_indices=[i, i + 1, i + 2])

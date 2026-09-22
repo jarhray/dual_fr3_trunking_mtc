@@ -1,4 +1,4 @@
-"""Terminal orchestration after successful cached MTC execution (simulation only)."""
+"""Terminal orchestration with backend-specific observation and held completion."""
 import copy
 import json
 import time
@@ -6,10 +6,24 @@ import time
 from moveit_msgs.msg import PlanningScene, PlanningSceneComponents
 from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
 from std_srvs.srv import Trigger
-from dual_fr3_maniskill.usb.insertion import ACTIVE_STATES, ALIGNMENT_STATES, SERVICE_OPERATIONS, SERVICE_PREFIX
+from dual_fr3_maniskill.usb.insertion import ACTIVE_STATES, ALIGNMENT_STATES, SERVICE_OPERATIONS, SERVICE_PREFIX, InsertionPolicy
 
 import dual_fr3_trunking_mtc.insertion_task.motion as insertion_motion
 import dual_fr3_trunking_mtc.insertion_task.planning_scene as insertion_planning_scene
+
+
+def estimated_hold_valid(status):
+    """A historical reached result cannot substitute for a current valid hold."""
+    if (status.get('state') != 'inserted_unretained' or
+            status.get('insertion_success') is not True or
+            status.get('outcome') != 'estimated_reached' or
+            status.get('local_controller_owns_left_arm') is not True):
+        return False
+    if status.get('backend') == 'real' and (
+            status.get('executor_state') != 'STOPPED' or status.get('stop_acknowledged') is not True):
+        return False
+    policy = InsertionPolicy(dict(status.get('limits', {}), observation_mode='calibrated_estimate'))
+    return policy.observation_failure(status.get('observation', {})) is None
 
 
 class TerminalInsertion:
@@ -19,16 +33,17 @@ class TerminalInsertion:
     retention before detaching the planning object or opening the left hand.
     """
 
-    def __init__(self, client, config_path, node, logger):
+    def __init__(self, client, config_path, node, logger, *, config=None):
         from dual_fr3_maniskill.cable.model import load_geometry_config
 
         self.client = client
         self.node = node
         self.logger = logger
         self.config_path = config_path
-        self.config = load_geometry_config(config_path).get('insertion', {})
+        self.config = load_geometry_config(config_path).get('insertion', {}) if config is None else config
+        self.service_prefix = getattr(client, 'service_prefix', SERVICE_PREFIX)
         self.services = {
-            name: client.node.create_client(Trigger, SERVICE_PREFIX + name)
+            name: client.node.create_client(Trigger, self.service_prefix + name)
             for name in SERVICE_OPERATIONS
         }
         self.get_scene = client.node.create_client(GetPlanningScene, '/get_planning_scene')
@@ -60,7 +75,7 @@ class TerminalInsertion:
     def validate_cached_continuation(self, validator):
         """Check the existing approach/preflight from the validated transport end."""
         from dual_fr3_maniskill.cable.model import USB_LINK
-        from dual_fr3_maniskill.usb.geometry import SOCKET_NAME, HOLE, measure
+        from dual_fr3_maniskill.usb.geometry import SOCKET_NAME, HOLE, TIP, measure
         from dual_fr3_maniskill.usb.insertion import InsertionLimits
         from dual_fr3_maniskill.usb.alignment import AlignmentLimits, error_norm
         from dual_fr3_trunking_mtc.mtc.cached_execution import (
@@ -83,10 +98,13 @@ class TerminalInsertion:
             if item.spec.name == 'socket_preinsert':
                 limits = InsertionLimits.read(self.config)
                 alignment = AlignmentLimits.read(self.config.get('alignment', {}), limits)
+                geometry = (self.config.get('calibration', {})
+                            if self.config.get('observation_mode') == 'calibrated_estimate' else self.config)
                 observation = measure(
                     validator.scene.get_frame_transform(SOCKET_NAME),
                     validator.scene.get_frame_transform(USB_LINK),
-                    self.config.get('hole_center_m', HOLE))
+                    geometry.get('hole_center_m', HOLE),
+                    tip_in_usb_m=geometry.get('tip_in_usb_m', TIP))
                 if (error_norm(observation, limits.preinsert_m) > alignment.capture_translation_m or
                         observation['orientation_error_rad'] > alignment.capture_angle_rad):
                     self.logger.error('[cached-validation] socket_preinsert: measured grasp outside local alignment capture range')
@@ -202,6 +220,7 @@ class TerminalInsertion:
     def execute(self, gripper_controller):
         retained = False
         released = False
+        estimated_hold = False
         phase = 'initial'
         try:
             status = self.command('status')
@@ -219,6 +238,15 @@ class TerminalInsertion:
             phase = 'insertion'
             self.align_left()
             self.feedback_insert()
+
+            if self.config.get('observation_mode') == 'calibrated_estimate':
+                # No inferred retention: the real executor owns its stopped hold;
+                # simulation retains the local drive until explicit cancellation.
+                status = self.command('status')
+                if not estimated_hold_valid(status):
+                    raise RuntimeError('Estimated insertion did not reach its declared outcome')
+                estimated_hold = True
+                return True
 
             if not self.config.get('retain_after_success', True):
                 return True
@@ -246,10 +274,11 @@ class TerminalInsertion:
                     self.logger.exception('Unable to report return failure')
             return False
         finally:
-            try:
-                self.command('cancel')
-            except Exception:
-                self.logger.exception('Unable to acknowledge controller release')
+            if not estimated_hold:
+                try:
+                    self.command('cancel')
+                except Exception:
+                    self.logger.exception('Unable to acknowledge controller release')
             if self.saved_acm is not None:
                 try:
                     self.apply(PlanningScene(is_diff=True, allowed_collision_matrix=self.saved_acm))

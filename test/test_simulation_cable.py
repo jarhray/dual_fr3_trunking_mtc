@@ -100,6 +100,49 @@ def observed_status():
                 relative_pose=dict(position_m=[.001, 0., .0121], quaternion_wxyz=[1., 0., 0., 0.]))
 
 
+def estimated_status():
+    snapshot = observed_status()
+    snapshot.pop('external_support')
+    snapshot.update(state='calibrated_estimate', pose_source='calibrated_estimate',
+        observation_valid=True, gripper_closed=True, grasp_assumption_valid=True,
+        calibration_verified=True, calibration_id='synthetic_mtc_test',
+        grasp_valid=None, evaluation_only=dict(state='slipping', relative_pose=dict(
+            position_m=[.1, .2, .3], quaternion_wxyz=[1., 0., 0., 0.])))
+    return snapshot
+
+
+def test_estimated_sync_and_transport_share_calibrated_grasp_contract():
+    from dual_fr3_trunking_mtc.simulation_cable import SimulationCableController
+    snapshot = estimated_status()
+    applied = []
+    def call(client, request, **kwargs):
+        if client == 'status':
+            return NS(message=json.dumps(snapshot))
+        applied.append(request.scene)
+        return NS(success=True)
+    controller = controller_stub(status='status', apply='apply', _call=call)
+    assert controller.sync_grasp(CONFIG)
+    assert controller.ensure_grasp()
+    pose = applied[0].robot_state.attached_collision_objects[0].object.mesh_poses[0]
+    assert pose.position.x == .001 and pose.position.z == .0121
+    assert snapshot['evaluation_only']['relative_pose']['position_m'][0] == .1
+
+
+@pytest.mark.parametrize('field,value', [('observation_valid', False), ('gripper_closed', False),
+    ('grasp_assumption_valid', False), ('calibration_verified', False), ('calibration_id', '')])
+def test_invalid_estimated_status_refuses_both_attachment_and_transport(field, value):
+    snapshot = estimated_status()
+    snapshot[field] = value
+    snapshot['evaluation_only'] = observed_status()
+    def call(client, request, **kwargs):
+        assert client == 'status', 'invalid estimate changed planning scene'
+        return NS(message=json.dumps(snapshot))
+    controller = controller_stub(status='status', apply='apply', _call=call)
+    for operation in (lambda: controller.sync_grasp(CONFIG), controller.ensure_grasp):
+        with pytest.raises(RuntimeError, match='calibrated grasp assumption'):
+            operation()
+
+
 @pytest.mark.parametrize("operation,expected", [("spawn", ["prepare", "spawn", "status", "apply"]),
                                                    ("release_verify", ["release", "verify", "status", "apply"])])
 def test_physical_verification_precedes_planning_attachment(operation, expected):
